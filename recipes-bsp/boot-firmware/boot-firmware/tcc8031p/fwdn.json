@@ -1,5 +1,0 @@
-{
-    "fwdn" : ".\\fwdn.rom",
-	"key_table" : ".\\keypackages.bin",
-    "dram" : ".\\dram_params.bin"
-}

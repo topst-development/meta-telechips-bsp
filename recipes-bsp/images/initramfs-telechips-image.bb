@@ -2,7 +2,7 @@ SUMMARY = "Initramfs image for telechips kernel"
 DESCRIPTION = "This image provides initramfs"
 LICENSE = "MIT"
 
-IMAGE_FSTYPES = "cpio"
+IMAGE_FSTYPES = "${INITRAMFS_FSTYPES}"
 
 # avoid circular dependencies
 EXTRA_IMAGEDEPENDS = ""

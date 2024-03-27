@@ -1,8 +1,0 @@
-[Unit]
-Description=This service to enable removable disk after application ready.
-
-[Path]
-PathExists=/var/run/MediaPlayer.pid
-
-[Install]
-WantedBy=graphical.target

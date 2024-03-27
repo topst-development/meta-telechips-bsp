@@ -1,6 +1,6 @@
 DESCRIPTION = "ARM Gator Service Daemon"
 SECTION = "applications"
-LICENSE = "GPLv2"
+LICENSE = "GPL-2.0-only"
 LIC_FILES_CHKSUM = "file://COPYING;md5=b234ee4d69f5fce4486a80fdaf4a4263"
 
 SRC_URI = "file://gator_${PV}.tar.gz \
@@ -20,8 +20,8 @@ S = "${WORKDIR}/gator/daemon"
 # for systemd
 SYSTEMD_PACKAGES = "${PN}"
 
-MakefileName_aarch64 = "Makefile_aarch64"
-MakefileName_arm = "Makefile"
+MakefileName:aarch64 = "Makefile_aarch64"
+MakefileName:arm = "Makefile"
 
 do_compile() {
 	oe_runmake -f ${MakefileName} V=1 || die "make failed"
@@ -35,5 +35,5 @@ do_install() {
 	install -m 644 ${WORKDIR}/gatord.service	${D}/${systemd_unitdir}/system/gatord.service
 }
 
-FILES_${PN} += "${systemd_unitdir}"
-INSANE_SKIP_${PN} += "already-stripped"
+FILES:${PN} += "${systemd_unitdir}"
+INSANE_SKIP:${PN} += "already-stripped"

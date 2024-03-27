@@ -1,0 +1,275 @@
+From ca3f113623976df41005363e46c14db07d564367 Mon Sep 17 00:00:00 2001
+From: YoungJun <youngjun@telechips.com>
+Date: Wed, 14 Jun 2023 15:22:23 +0900
+Subject: [PATCH 3/3] [feat] waylandsink: support ivi shell interface
+
+- Add the ivi_application interface for creating ivi_surface.
+- Add the surface-id property that makes the global identified numeric
+  id.
+- The property is window-resolution and you can use with:
+  waylandsink surface-id=10000
+
+Change-Id: I89293c4a30427b14ff3c391e4b0ae79bb979a2a0
+---
+ ext/wayland/gstwaylandsink.c | 22 +++++++++++++++--
+ ext/wayland/gstwaylandsink.h |  1 +
+ ext/wayland/meson.build      |  1 +
+ ext/wayland/wldisplay.c      |  6 +++++
+ ext/wayland/wldisplay.h      |  2 ++
+ ext/wayland/wlwindow.c       | 47 +++++++++++++++++++++++++++++++++---
+ ext/wayland/wlwindow.h       |  4 ++-
+ 7 files changed, 76 insertions(+), 7 deletions(-)
+
+diff --git a/ext/wayland/gstwaylandsink.c b/ext/wayland/gstwaylandsink.c
+index 3871d7c..cfc59d8 100644
+--- a/ext/wayland/gstwaylandsink.c
++++ b/ext/wayland/gstwaylandsink.c
+@@ -64,7 +64,8 @@ enum
+   PROP_0,
+   PROP_DISPLAY,
+   PROP_FULLSCREEN,
+-  PROP_SCALE
++  PROP_SCALE,
++  PROP_IVI_SURFACE_ID
+ };
+ 
+ GST_DEBUG_CATEGORY (gstwayland_debug);
+@@ -218,6 +219,12 @@ gst_wayland_sink_class_init (GstWaylandSinkClass * klass)
+           "resolution of video widthxheight ",
+           NULL, G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS));
+ 
++  g_object_class_install_property (gobject_class, PROP_IVI_SURFACE_ID,
++      g_param_spec_uint ("surface-id", "IVI Surface ID",
++          "Global numeric ID to identify a surface to be managed (9000+pid = default) ",
++          0, G_MAXUINT, 0,
++          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
++
+   gst_type_mark_as_plugin_api (GST_TYPE_WAYLAND_VIDEO, 0);
+ }
+ 
+@@ -258,6 +265,11 @@ gst_wayland_sink_get_property (GObject * object,
+       g_value_set_boolean (value, sink->fullscreen);
+       GST_OBJECT_UNLOCK (sink);
+       break;
++    case PROP_IVI_SURFACE_ID:
++      GST_OBJECT_LOCK (sink);
++      g_value_set_uint (value, sink->id_ivisurf);
++      GST_OBJECT_UNLOCK (sink);
++      break;
+     default:
+       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+       break;
+@@ -294,6 +306,11 @@ gst_wayland_sink_set_property (GObject * object,
+           g_free(string);
+       GST_OBJECT_UNLOCK (sink);
+       break;
++    case PROP_IVI_SURFACE_ID:
++      GST_OBJECT_LOCK (sink);
++      sink->id_ivisurf = g_value_get_uint (value);
++      GST_OBJECT_UNLOCK (sink);
++      break;
+     default:
+       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+       break;
+@@ -740,7 +757,8 @@ gst_wayland_sink_show_frame (GstVideoSink * vsink, GstBuffer * buffer)
+     if (!sink->window) {
+       /* if we were not provided a window, create one ourselves */
+       sink->window = gst_wl_window_new_toplevel (sink->display,
+-          &sink->video_info, sink->fullscreen, &sink->render_lock);
++          &sink->video_info, sink->fullscreen,
++          sink->id_ivisurf, &sink->render_lock);
+       g_signal_connect_object (sink->window, "closed",
+           G_CALLBACK (on_window_closed), sink, 0);
+     }
+diff --git a/ext/wayland/gstwaylandsink.h b/ext/wayland/gstwaylandsink.h
+index 03cb9b5..52ca6ea 100644
+--- a/ext/wayland/gstwaylandsink.h
++++ b/ext/wayland/gstwaylandsink.h
+@@ -64,6 +64,7 @@ struct _GstWaylandSink
+ 
+   gchar *display_name;
+   gint scale_width, scale_height;
++  guint id_ivisurf;
+ 
+   gboolean redraw_pending;
+   GMutex render_lock;
+diff --git a/ext/wayland/meson.build b/ext/wayland/meson.build
+index a3ffb70..137b24a 100644
+--- a/ext/wayland/meson.build
++++ b/ext/wayland/meson.build
+@@ -20,6 +20,7 @@ if use_wayland
+         ['/unstable/fullscreen-shell/fullscreen-shell-unstable-v1.xml',
+          'fullscreen-shell-unstable-v1-protocol.c', 'fullscreen-shell-unstable-v1-client-protocol.h'],
+         ['/stable/xdg-shell/xdg-shell.xml', 'xdg-shell-protocol.c', 'xdg-shell-client-protocol.h'],
++        ['/stable/ivi-application/ivi-application.xml', 'ivi-application-protocol.c', 'ivi-application-client-protocol.h'],
+     ]
+     protocols_files = []
+ 
+diff --git a/ext/wayland/wldisplay.c b/ext/wayland/wldisplay.c
+index f326091..b91ddf6 100644
+--- a/ext/wayland/wldisplay.c
++++ b/ext/wayland/wldisplay.c
+@@ -102,6 +102,9 @@ gst_wl_display_finalize (GObject * gobject)
+   if (self->fullscreen_shell)
+     zwp_fullscreen_shell_v1_release (self->fullscreen_shell);
+ 
++  if (self->ivi_application)
++    ivi_application_destroy(self->ivi_application);
++
+   if (self->compositor)
+     wl_compositor_destroy (self->compositor);
+ 
+@@ -237,6 +240,9 @@ registry_handle_global (void *data, struct wl_registry *registry,
+     self->dmabuf =
+         wl_registry_bind (registry, id, &zwp_linux_dmabuf_v1_interface, 1);
+     zwp_linux_dmabuf_v1_add_listener (self->dmabuf, &dmabuf_listener, self);
++  } else if (g_strcmp0 (interface, "ivi_application") == 0) {
++    self->ivi_application =
++        wl_registry_bind (registry, id, &ivi_application_interface, 1);
+   }
+ }
+ 
+diff --git a/ext/wayland/wldisplay.h b/ext/wayland/wldisplay.h
+index a713442..a6d621f 100644
+--- a/ext/wayland/wldisplay.h
++++ b/ext/wayland/wldisplay.h
+@@ -28,6 +28,7 @@
+ #include "viewporter-client-protocol.h"
+ #include "linux-dmabuf-unstable-v1-client-protocol.h"
+ #include "fullscreen-shell-unstable-v1-client-protocol.h"
++#include "ivi-application-client-protocol.h"
+ 
+ G_BEGIN_DECLS
+ 
+@@ -60,6 +61,7 @@ struct _GstWlDisplay
+   struct wl_shm *shm;
+   struct wp_viewporter *viewporter;
+   struct zwp_linux_dmabuf_v1 *dmabuf;
++  struct ivi_application *ivi_application;
+   GArray *shm_formats;
+   GArray *dmabuf_formats;
+   gint scale_width;
+diff --git a/ext/wayland/wlwindow.c b/ext/wayland/wlwindow.c
+index 46d162d..142bb04 100644
+--- a/ext/wayland/wlwindow.c
++++ b/ext/wayland/wlwindow.c
+@@ -23,6 +23,7 @@
+ #ifdef HAVE_CONFIG_H
+ #include <config.h>
+ #endif
++#include <unistd.h> // getpid()
+ 
+ #include "wlwindow.h"
+ #include "wlshmallocator.h"
+@@ -41,6 +42,8 @@ static guint signals[LAST_SIGNAL] = { 0 };
+ 
+ G_DEFINE_TYPE (GstWlWindow, gst_wl_window, G_TYPE_OBJECT);
+ 
++#define IVI_SURFACE_ID 9000
++
+ static void gst_wl_window_finalize (GObject * gobject);
+ 
+ static void gst_wl_window_update_borders (GstWlWindow * window);
+@@ -136,6 +139,22 @@ static const struct wl_shell_surface_listener wl_shell_surface_listener = {
+   handle_popup_done
+ };
+ 
++static void
++handle_ivi_surface_configure(void *data, struct ivi_surface *ivi_surface,
++                             int32_t width, int32_t height)
++{
++  GstWlWindow *window = data;
++
++  if (width == 0 || height == 0)
++    return;
++
++  gst_wl_window_set_render_rectangle (window, 0, 0, width, height);
++}
++
++static const struct ivi_surface_listener ivi_surface_listener = {
++  handle_ivi_surface_configure,
++};
++
+ static void
+ gst_wl_window_class_init (GstWlWindowClass * klass)
+ {
+@@ -167,6 +186,9 @@ gst_wl_window_finalize (GObject * gobject)
+   if (self->xdg_surface)
+     xdg_surface_destroy (self->xdg_surface);
+ 
++  if (self->ivi_surface)
++    ivi_surface_destroy(self->ivi_surface);
++
+   if (self->video_viewport)
+     wp_viewport_destroy (self->video_viewport);
+ 
+@@ -254,14 +276,31 @@ gst_wl_window_ensure_fullscreen (GstWlWindow * window, gboolean fullscreen)
+ 
+ GstWlWindow *
+ gst_wl_window_new_toplevel (GstWlDisplay * display, const GstVideoInfo * info,
+-    gboolean fullscreen, GMutex * render_lock)
++    gboolean fullscreen, guint id_ivisurf, GMutex * render_lock)
+ {
+   GstWlWindow *window;
+ 
+   window = gst_wl_window_new_internal (display, render_lock);
+ 
+   /* Check which protocol we will use (in order of preference) */
+-  if (display->xdg_wm_base) {
++  if (display->ivi_application) {
++    if (!id_ivisurf)
++      id_ivisurf = IVI_SURFACE_ID + (guint)getpid();
++
++    GST_DEBUG ("ivi surface id = %i", id_ivisurf);
++
++    window->ivi_surface =
++        ivi_application_surface_create(display->ivi_application,
++            id_ivisurf, window->area_surface);
++    if (window->ivi_surface) {
++      ivi_surface_add_listener (window->ivi_surface,
++          &ivi_surface_listener, window);
++    } else {
++      GST_ERROR ("Unable to get ivi_surface");
++      g_object_unref (window);
++      return NULL;
++    }
++  } else if (display->xdg_wm_base) {
+     gint64 timeout;
+ 
+     /* First create the XDG surface */
+@@ -317,8 +356,8 @@ gst_wl_window_new_toplevel (GstWlDisplay * display, const GstVideoInfo * info,
+         window->area_surface, ZWP_FULLSCREEN_SHELL_V1_PRESENT_METHOD_ZOOM,
+         NULL);
+   } else {
+-    GST_ERROR ("Unable to use either wl_shell, xdg_wm_base or "
+-        "zwp_fullscreen_shell.");
++    GST_ERROR ("Unable to use either wl_shell, xdg_wm_base, "
++        "zwp_fullscreen_shell or ivi_application");
+     goto error;
+   }
+ 
+diff --git a/ext/wayland/wlwindow.h b/ext/wayland/wlwindow.h
+index 303c336..eaf7011 100644
+--- a/ext/wayland/wlwindow.h
++++ b/ext/wayland/wlwindow.h
+@@ -55,6 +55,7 @@ struct _GstWlWindow
+   struct wl_shell_surface *wl_shell_surface;
+   struct xdg_surface *xdg_surface;
+   struct xdg_toplevel *xdg_toplevel;
++  struct ivi_surface *ivi_surface;
+   gboolean configured;
+   GCond configure_cond;
+   GMutex configure_mutex;
+@@ -83,7 +84,8 @@ GType gst_wl_window_get_type (void);
+ void gst_wl_window_ensure_fullscreen (GstWlWindow * window,
+         gboolean fullscreen);
+ GstWlWindow *gst_wl_window_new_toplevel (GstWlDisplay * display,
+-        const GstVideoInfo * info, gboolean fullscreen, GMutex * render_lock);
++        const GstVideoInfo * info, gboolean fullscreen,
++        guint id_ivisurf, GMutex * render_lock);
+ GstWlWindow *gst_wl_window_new_in_surface (GstWlDisplay * display,
+         struct wl_surface * parent, GMutex * render_lock);
+ 
+-- 
+2.25.1
+

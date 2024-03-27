@@ -1,11 +1,10 @@
 [Unit]
-Description=This service to enable removable disk after application ready.
-ConditionPathExists=/var/run/MediaPlayer.pid
-After=graphical.target
+Description=This service to enable removable disk
+After=systemd-modules-load.service multi-user.target
 
 [Service]
 Type=simple
 ExecStart=/bin/sh -c "/usr/bin/enable-removable-disk.sh start"
 
 [Install]
-WantedBy=graphical.target
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+[ref] disable log print
+
+diff -Naur before/gst/gstinfo.c 1.20.3-r0/gstreamer-1.20.3/gst/gstinfo.c
+--- before/gst/gstinfo.c	2022-06-16 07:36:22.000000000 +0900
++++ 1.20.3-r0/gstreamer-1.20.3/gst/gstinfo.c	2022-11-08 11:57:57.630828042 +0900
+@@ -553,7 +553,7 @@
+   g_return_if_fail (category != NULL);
+ 
+ #ifdef GST_ENABLE_EXTRA_CHECKS
+-  g_warn_if_fail (object == NULL || G_IS_OBJECT (object));
++  //g_warn_if_fail (object == NULL || G_IS_OBJECT (object));
+ #endif
+ 
+   if (level > gst_debug_category_get_threshold (category))

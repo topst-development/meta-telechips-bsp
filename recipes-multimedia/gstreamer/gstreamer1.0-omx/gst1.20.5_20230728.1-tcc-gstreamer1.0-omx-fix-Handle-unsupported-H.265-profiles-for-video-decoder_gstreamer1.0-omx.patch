@@ -1,0 +1,42 @@
+From da2cdc91aaba5f97ddc1205643776f0ec0bd6967 Mon Sep 17 00:00:00 2001
+From: "hoon.bae" <hoon.bae@telechips.com>
+Date: Fri, 28 Jul 2023 16:58:56 +0900
+Subject: [PATCH] [fix] Handle unsupported H.265 profiles for video decoding
+
+Symptom:
+Playback of certain video files leads to a delayed error message and occasional system shutdown. The error message for unsupported video profiles such as 'main-12' in H.265 encoded video files is delayed by several seconds. This results in an elongated pipeline setup time when playing back these specific files.
+
+Cause:
+The GstOMX video decoder was not properly checking for unsupported H.265 profiles when the flag GST_OMX_HACK_PASS_PROFILE_TO_DECODER was not set. This caused the decoder to attempt to process videos with an unsupported profile, resulting in the aforementioned issues.
+
+solution:
+Added a check in the gst_omx_h265_dec_set_format function to ensure that the profile of the video is supported, even when the GST_OMX_HACK_PASS_PROFILE_TO_DECODER flag is not set. This allows the system to promptly return an error message when an unsupported profile is detected, thereby reducing the setup time for the pipeline and preventing potential system instability.
+
+TCS : SD807XL1-1178
+---
+ omx/gstomxh265dec.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/omx/gstomxh265dec.c b/omx/gstomxh265dec.c
+index f6ce227..cd757ff 100644
+--- a/omx/gstomxh265dec.c
++++ b/omx/gstomxh265dec.c
+@@ -215,6 +215,15 @@ gst_omx_h265_dec_set_format (GstOMXVideoDec * dec, GstOMXPort * port,
+   if (klass->cdata.hacks & GST_OMX_HACK_PASS_PROFILE_TO_DECODER) {
+     if (!set_profile_and_level (GST_OMX_H265_DEC (dec), state))
+       return FALSE;
++  } else {
++    GstStructure *s = gst_caps_get_structure (state->caps, 0);
++    const gchar *profile_string = gst_structure_get_string (s, "profile");
++
++    if (profile_string && 
++        gst_omx_h265_utils_get_profile_from_str (profile_string) == OMX_VIDEO_HEVCProfileUnknown) {
++      GST_ERROR_OBJECT (dec, "Unsupported profile %s", profile_string);
++      return FALSE;
++    }
+   }
+ 
+   /* Enable subframe mode if NAL aligned */
+-- 
+2.25.1
+

@@ -2,7 +2,7 @@ SUMMARY = "Miscellaneous files for the base system"
 DESCRIPTION = "The base-files package creates the basic system directory structure and provides a small set of key configuration files for the system."
 SECTION = "base"
 PR = "r89"
-LICENSE = "GPLv2"
+LICENSE = "GPL-2.0-only"
 LIC_FILES_CHKSUM = "file://licenses/GPL-2;md5=94d55d512a9ba36caa9b7df079bae19f"
 # Removed all license related tasks in this recipe as license.bbclass 
 # now deals with this. In order to get accurate licensing on to the image:
@@ -14,10 +14,11 @@ SRC_URI = "file://licenses/GPL-2"
 
 S = "${WORKDIR}"
 
-docdir_append = "/${P}"
+docdir:append = "/${P}"
 dirs1777 = "/tmp"
 dirs2775 = ""
-dirs755 = "/dev /proc /sys ${sysconfdir}"
+dirs555 = "/proc /sys"
+dirs755 = "/dev ${sysconfdir}"
 dirs755-lsb = ""
 dirs2775-lsb = ""
 
@@ -25,14 +26,17 @@ volatiles = ""
 conffiles = ""
 
 do_install () {
+	for d in ${dirs555}; do
+		install -m 0555 -d ${D}$d
+	done
 	for d in ${dirs755}; do
-		install -m 0755 -d "${D}$d"
+		install -m 0755 -d ${D}$d
 	done
 	for d in ${dirs1777}; do
-		install -m 1777 -d "${D}$d"
+		install -m 1777 -d ${D}$d
 	done
 	for d in ${dirs2775}; do
-		install -m 2755 -d "${D}$d"
+		install -m 2775 -d ${D}$d
 	done
 	for d in ${volatiles}; do
                 if [ -d "${D}${localstatedir}/volatile/$d" ]; then
@@ -46,7 +50,7 @@ do_install () {
 }
 
 PACKAGES = "${PN}-doc ${PN} ${PN}-dev ${PN}-dbg"
-FILES_${PN} = "/"
-FILES_${PN}-doc = "${docdir} ${datadir}/common-licenses"
+FILES:${PN} = "/"
+FILES:${PN}-doc = "${docdir} ${datadir}/common-licenses"
 
 PACKAGE_ARCH = "${MACHINE_ARCH}"

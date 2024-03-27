@@ -1,11 +1,5 @@
 require optee-common.inc
 
-OPTEE_SRC_URL = "${TELECHIPS_AUTOMOTIVE_TEE_GIT}/teeos_commercial_tcc805x.git"
-
-SRC_URI = " \
-	${@bb.utils.contains('INVITE_PLATFORM', 'optee', \
-		'${OPTEE_SRC_URL};protocol=${ALS_GIT_PROTOCOL};branch=v3.12', \
-		'', d)} \
-"
-
+COMPATIBLE_MACHINE = "(tcc897x|tcc802x|tcc803x|tcc805x)"
+OPTEE_BRANCH = "v3.12"
 SRCREV = "${AUTOREV}"

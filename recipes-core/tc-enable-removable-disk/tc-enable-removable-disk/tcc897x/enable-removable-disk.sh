@@ -16,14 +16,14 @@
 case "$1" in
   start)
 	. /etc/profile
-	if [ -f /sys/devices/tcc-ehci/vbus ]; then
-		echo 1 > /sys/module/ehci_tcc/parameters/vbus_control_enable
-		echo on > /sys/devices/tcc-ehci/vbus
+	if [ -f /sys/devices/platform/tcc-ehci/ehci_vbus ]; then
+		echo 1 > /sys/module/ehci_tcc/parameters/ehci_vbus_control_enable
+		echo on > /sys/devices/platform/tcc-ehci/ehci_vbus
 	fi
 
-	if [ -f /sys/devices/dwc_otg/vbus ]; then
-		echo 1 > /sys/module/tcc_dwc_otg/parameters/vbus_control_enable
-		echo on > /sys/devices/dwc_otg/vbus
+	if [ -f /sys/devices/platform/71b00000.usb_dwc2/dwc2_vbus ]; then
+		echo 1 > /sys/module/dwc2/parameters/dwc2_vbus_control_enable
+		echo on > /sys/devices/platform/71b00000.usb_dwc2/dwc2_vbus
 	fi
 
 	udevadm trigger --action=add --subsystem-match=block --sysname-match=mmcblk1*

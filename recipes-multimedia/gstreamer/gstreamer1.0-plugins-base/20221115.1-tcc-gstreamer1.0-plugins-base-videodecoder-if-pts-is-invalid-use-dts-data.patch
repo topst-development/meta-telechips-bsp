@@ -1,0 +1,30 @@
+videodecoder: Gstomxvideodec need pts.if pts is invalid, use dts data.(TCS: ID086A-673)
+audiodecoder: Some files generate audio noise therefore don't check adapter pts
+
+diff -Naur before/gst-libs/gst/audio/gstaudiodecoder.c 1.16.2-r0/gst-plugins-base-1.16.2/gst-libs/gst/audio/gstaudiodecoder.c
+--- before/gst-libs/gst/audio/gstaudiodecoder.c	2021-01-20 14:13:13.066165043 +0900
++++ 1.16.2-r0/gst-plugins-base-1.16.2/gst-libs/gst/audio/gstaudiodecoder.c	2021-02-04 14:14:28.715042774 +0900
+@@ -1687,7 +1687,7 @@
+       }
+       /* track upstream ts, but do not get stuck if nothing new upstream */
+       ts = gst_adapter_prev_pts (priv->adapter, &distance);
+-      if (ts != priv->prev_ts || distance <= priv->prev_distance) {
++      if (ts != priv->prev_ts /*|| distance <= priv->prev_distance*/) {
+         priv->prev_ts = ts;
+         priv->prev_distance = distance;
+       } else {
+diff -Naur before/gst-libs/gst/video/gstvideodecoder.c 1.16.2-r0/gst-plugins-base-1.16.2/gst-libs/gst/video/gstvideodecoder.c
+--- before/gst-libs/gst/video/gstvideodecoder.c	2021-01-20 14:13:12.805162816 +0900
++++ 1.16.2-r0/gst-plugins-base-1.16.2/gst-libs/gst/video/gstvideodecoder.c	2021-02-04 10:42:06.275212980 +0900
+@@ -2101,6 +2105,11 @@
+   if (priv->current_frame == NULL)
+     priv->current_frame = gst_video_decoder_new_frame (decoder);
+ 
++  if(!GST_BUFFER_PTS_IS_VALID(buf) && GST_BUFFER_DTS_IS_VALID(buf))
++  {
++    GST_BUFFER_PTS(buf) = GST_BUFFER_DTS(buf);
++  }
++
+   if (!priv->packetized)
+     gst_video_decoder_add_buffer_info (decoder, buf);
+ 

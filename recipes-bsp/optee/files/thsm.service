@@ -1,5 +1,6 @@
 [Unit]
 Description=TEE-based HSM Service
+After=optee.service
 
 [Service]
 ExecStart=/usr/bin/thsmDaemon

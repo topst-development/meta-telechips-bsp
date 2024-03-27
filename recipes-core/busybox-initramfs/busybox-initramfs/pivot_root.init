@@ -7,13 +7,8 @@ MKDIR="/bin/mkdir"
 GREP="/bin/grep"
 SWITCH_ROOT="/sbin/switch_root"
 
-echo "Mounting devtmpfs"
 $MOUNT -t devtmpfs devtmpfs /dev
-
-echo "Mounting procfs"
 $MOUNT -t proc proc /proc
-
-echo "Mounting sysfs"
 $MOUNT -t sysfs sysfs /sys
 
 $GREP -q 'bootchart' /proc/cmdline 2>/dev/null
@@ -23,17 +18,16 @@ else
 	BOOT_CHART="0"
 fi
 
-
 CMDLINE=`cat /proc/cmdline`
 TO_SWITCH_ROOT="0"
-SYSTEM_PARTITION="/dev/mmcblk0p4"
+SYSTEM_PARTITION=""
 
 $MKDIR -p /switch_root
 
 for x in $CMDLINE; do
 	case "$x" in
-		partition.system=*)
-			 SYSTEM_PARTITION="${x#partition.system=}"
+		root=*)
+			 SYSTEM_PARTITION="${x#root=}"
 			 ;;
 	esac
 done
@@ -44,7 +38,6 @@ if [ -n "$SYSTEM_PARTITION" ]; then
 		$GREP -q ${SYSTEM_PARTITION#/dev/} /proc/partitions 2>/dev/null
 		[ "$?" = 1 ]
 	do
-		echo "wait for emmc ready"
 		usleep 10000
 		timeout=$(($timeout - 1))
 		if [ $timeout = 0 ];then

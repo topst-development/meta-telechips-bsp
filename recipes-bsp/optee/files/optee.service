@@ -1,9 +1,0 @@
-[Unit]
-Description=OP-TEE Supplicant Service
-
-[Service]
-ExecStart=/usr/bin/tee-supplicant
-
-[Install]
-WantedBy=multi-user.target
-

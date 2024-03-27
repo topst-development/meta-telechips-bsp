@@ -5,8 +5,8 @@ SECTION = "bsp"
 
 inherit native
 
-SRC_URI = "${TELECHIPS_AUTOMOTIVE_GIT}/mktcimg.git;protocol=${ALS_GIT_PROTOCOL};branch=${ALS_BRANCH}"
-SRCREV = "8bc51a87b06cfc696a17d7639ece7e0819b25a41"
+SRC_URI = "${TELECHIPS_AUTOMOTIVE_GIT}/tools/mktcimg.git;protocol=${ALS_GIT_PROTOCOL};branch=${ALS_BRANCH}"
+SRCREV = "d7f9f9ae15e4fd07228c54e698c257afb6318cf4"
 
 S = "${WORKDIR}/git"
 

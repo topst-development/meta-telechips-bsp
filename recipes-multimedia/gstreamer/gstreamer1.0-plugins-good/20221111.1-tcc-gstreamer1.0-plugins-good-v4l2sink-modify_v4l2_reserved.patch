@@ -1,0 +1,354 @@
+diff --git a/sys/v4l2/ext/videodev2.h b/sys/v4l2/ext/videodev2.h
+index 91f3162..24832ee 100644
+--- a/sys/v4l2/ext/videodev2.h
++++ b/sys/v4l2/ext/videodev2.h
+@@ -983,7 +983,7 @@ struct v4l2_plane {
+ 		__s32		fd;
+ 	} m;
+ 	__u32			data_offset;
+-	__u32			reserved[64];
++	__u32			reserved[11];
+ };
+ 
+ /**
+diff --git a/sys/v4l2/gstv4l2bufferpool.c b/sys/v4l2/gstv4l2bufferpool.c
+index 5ffe6a1..994ba55 100644
+--- a/sys/v4l2/gstv4l2bufferpool.c
++++ b/sys/v4l2/gstv4l2bufferpool.c
+@@ -1276,7 +1276,8 @@ dqevent_failed:
+   }
+ }
+ 
+-static GstFlowReturn gst_v4l2_buffer_pool_qbuf_tc_process(GstV4l2BufferPool *pool, GstBuffer *buf, struct v4l2_buffer *vbuffer)
++#ifdef TCC_V4L2SINK_DRIVER_USE
++static GstFlowReturn gst_v4l2_buffer_pool_qbuf_tc_process(GstV4l2BufferPool *pool, GstBuffer *buf, struct v4l2_buffer *vbuffer, struct tc_v4l2_buffer *tc_vbuf)
+ {
+   GstV4l2Object *v4l2object = pool->obj;
+   GstMapInfo map = GST_MAP_INFO_INIT;
+@@ -1290,6 +1291,7 @@ static GstFlowReturn gst_v4l2_buffer_pool_qbuf_tc_process(GstV4l2BufferPool *poo
+ 
+   if(G_LIKELY(tccvoutput.mType == TYPE_VIDEO))
+   {
++    memset(tc_vbuf, 0, sizeof(struct tc_v4l2_buffer));
+     vbuffer->sequence = tccvoutput.mDispIdx;
+ 
+     if(tccvoutput.mFlags & (DEC_FLAGS_USE_10BIT_2BYTE | DEC_FLAGS_USE_10BIT_REAL))
+@@ -1317,13 +1319,13 @@ static GstFlowReturn gst_v4l2_buffer_pool_qbuf_tc_process(GstV4l2BufferPool *poo
+     GST_INFO_OBJECT(pool, "map.data %p, v_out buf %p", map.data,tccvoutput.pCurrOut[0][0]);
+ 
+     vbuffer->m.planes[0].m.userptr = tccvoutput.pCurrOut[0][0];
+-    vbuffer->m.planes[0].reserved[2] = tccvoutput.pCurrOut[0][1];
+-    vbuffer->m.planes[0].reserved[3] = tccvoutput.pCurrOut[0][2];
++    tc_vbuf->vid_reserved[2] = tccvoutput.pCurrOut[0][1];
++    tc_vbuf->vid_reserved[3] = tccvoutput.pCurrOut[0][2];
+ 
+     vbuffer->m.planes[0].bytesused = tccvoutput.stStride.iY;
+ 
+-    vbuffer->m.planes[0].reserved[4] = tccvoutput.mWidth;
+-    vbuffer->m.planes[0].reserved[5] = tccvoutput.mHeight;
++    tc_vbuf->vid_reserved[4] = tccvoutput.mWidth;
++    tc_vbuf->vid_reserved[5] = tccvoutput.mHeight;
+ 
+     if ((v4l2object != NULL) &&
+        ( v4l2object->crop.c.top != 0   ||  v4l2object->crop.c.left != 0
+@@ -1331,116 +1333,113 @@ static GstFlowReturn gst_v4l2_buffer_pool_qbuf_tc_process(GstV4l2BufferPool *poo
+     {
+       GST_DEBUG_OBJECT(pool, "v4l2bufferpool new crop top=%d, left=%d, width=%d, height=%d\n",
+         v4l2object->crop.c.top, v4l2object->crop.c.left, v4l2object->crop.c.width, v4l2object->crop.c.height);
+-      vbuffer->m.planes[0].reserved[6] = v4l2object->crop.c.left;
+-      vbuffer->m.planes[0].reserved[7] = v4l2object->crop.c.top;
+-      vbuffer->m.planes[0].reserved[8] = v4l2object->crop.c.width;
+-      vbuffer->m.planes[0].reserved[9] = v4l2object->crop.c.height;
++      tc_vbuf->vid_reserved[6] = v4l2object->crop.c.left;
++      tc_vbuf->vid_reserved[7] = v4l2object->crop.c.top;
++      tc_vbuf->vid_reserved[8] = v4l2object->crop.c.width;
++      tc_vbuf->vid_reserved[9] = v4l2object->crop.c.height;
+     }
+     else
+     {
+-    vbuffer->m.planes[0].reserved[6] = tccvoutput.stCropInfo.iCropLeft;
+-    vbuffer->m.planes[0].reserved[7] = tccvoutput.stCropInfo.iCropTop;
+-    vbuffer->m.planes[0].reserved[8] = tccvoutput.stCropInfo.iCropWidth;
+-    vbuffer->m.planes[0].reserved[9] = tccvoutput.stCropInfo.iCropHeight;
++      tc_vbuf->vid_reserved[6] = tccvoutput.stCropInfo.iCropLeft;
++      tc_vbuf->vid_reserved[7] = tccvoutput.stCropInfo.iCropTop;
++      tc_vbuf->vid_reserved[8] = tccvoutput.stCropInfo.iCropWidth;
++      tc_vbuf->vid_reserved[9] = tccvoutput.stCropInfo.iCropHeight;
+     }
+ 
+     if(tccvoutput.mFlags & DEC_FLAGS_USE_MAP_CONV)
+     {
+-      vbuffer->m.planes[0].reserved[10] = 1;
+-#if 0
+-        memcpy((void *)&vbuffer->m.planes[0].reserved[11], &tccvoutput.stHEVCMapConv, sizeof(hevc_dec_MapConv_info_t));
+-#else
+-        vbuffer->m.planes[0].reserved[11] = (unsigned int)tccvoutput.stHEVCMapConv.m_CompressedY[0];
+-        vbuffer->m.planes[0].reserved[12] = 0;//(unsigned int)tccvoutput.stHEVCMapConv.m_CompressedY[1];
+-        vbuffer->m.planes[0].reserved[13] = (unsigned int)tccvoutput.stHEVCMapConv.m_CompressedCb[0];
+-        vbuffer->m.planes[0].reserved[14] = 0;//(unsigned int)tccvoutput.stHEVCMapConv.m_CompressedCb[1];
+-
+-        vbuffer->m.planes[0].reserved[15] = (unsigned int)tccvoutput.stHEVCMapConv.m_FbcYOffsetAddr[0];
+-        vbuffer->m.planes[0].reserved[16] = 0;//(unsigned int)tccvoutput.stHEVCMapConv.m_FbcYOffsetAddr[1];
+-        vbuffer->m.planes[0].reserved[17] = (unsigned int)tccvoutput.stHEVCMapConv.m_FbcCOffsetAddr[0];
+-        vbuffer->m.planes[0].reserved[18] = 0;//(unsigned int)tccvoutput.stHEVCMapConv.m_FbcCOffsetAddr[1];
+-
+-        vbuffer->m.planes[0].reserved[19] = tccvoutput.stHEVCMapConv.m_uiLumaStride;
+-        vbuffer->m.planes[0].reserved[20] = tccvoutput.stHEVCMapConv.m_uiChromaStride;
+-        vbuffer->m.planes[0].reserved[21] = tccvoutput.stHEVCMapConv.m_uiLumaBitDepth;
+-        vbuffer->m.planes[0].reserved[22] = tccvoutput.stHEVCMapConv.m_uiChromaBitDepth;
+-        vbuffer->m.planes[0].reserved[23] = tccvoutput.stHEVCMapConv.m_uiFrameEndian;
+-        vbuffer->m.planes[0].reserved[24] = tccvoutput.stHEVCMapConv.m_Reserved[0]; //Codec Type (HEVC:15, VP9:16)
+-#endif
++      tc_vbuf->vid_reserved[10] = 1;
++      tc_vbuf->vid_reserved[11] = (unsigned int)tccvoutput.stHEVCMapConv.m_CompressedY[0];
++      tc_vbuf->vid_reserved[12] = 0;//(unsigned int)tccvoutput.stHEVCMapConv.m_CompressedY[1];
++      tc_vbuf->vid_reserved[13] = (unsigned int)tccvoutput.stHEVCMapConv.m_CompressedCb[0];
++      tc_vbuf->vid_reserved[14] = 0;//(unsigned int)tccvoutput.stHEVCMapConv.m_CompressedCb[1];
++
++      tc_vbuf->vid_reserved[15] = (unsigned int)tccvoutput.stHEVCMapConv.m_FbcYOffsetAddr[0];
++      tc_vbuf->vid_reserved[16] = 0;//(unsigned int)tccvoutput.stHEVCMapConv.m_FbcYOffsetAddr[1];
++      tc_vbuf->vid_reserved[17] = (unsigned int)tccvoutput.stHEVCMapConv.m_FbcCOffsetAddr[0];
++      tc_vbuf->vid_reserved[18] = 0;//(unsigned int)tccvoutput.stHEVCMapConv.m_FbcCOffsetAddr[1];
++
++      tc_vbuf->vid_reserved[19] = tccvoutput.stHEVCMapConv.m_uiLumaStride;
++      tc_vbuf->vid_reserved[20] = tccvoutput.stHEVCMapConv.m_uiChromaStride;
++      tc_vbuf->vid_reserved[21] = tccvoutput.stHEVCMapConv.m_uiLumaBitDepth;
++      tc_vbuf->vid_reserved[22] = tccvoutput.stHEVCMapConv.m_uiChromaBitDepth;
++      tc_vbuf->vid_reserved[23] = tccvoutput.stHEVCMapConv.m_uiFrameEndian;
++      tc_vbuf->vid_reserved[24] = tccvoutput.stHEVCMapConv.m_Reserved[0]; //Codec Type (HEVC:15, VP9:16)
+     }
+     else if(tccvoutput.mFlags & DEC_FLAGS_USE_DTRC)
+     {
+-        vbuffer->m.planes[0].reserved[10] = 2;
+-        memcpy((void *)&vbuffer->m.planes[0].reserved[11], &tccvoutput.stDTRCInfo, sizeof(vp9_compressed_info_t));
++        tc_vbuf->vid_reserved[10] = 2;
++        memcpy((void *)&tc_vbuf->vid_reserved[11], &tccvoutput.stDTRCInfo, sizeof(vp9_compressed_info_t));
+     }
+     else
+     {
+-      vbuffer->m.planes[0].reserved[10] = 0;
++      tc_vbuf->vid_reserved[10] = 0;
+     }
+ 
+     if(tccvoutput.mHEVCUserDataEnalbe != 0)
+     {
+-      memcpy((void *)&vbuffer->m.planes[0].reserved[26], &tccvoutput.stHEVCUserInfo, sizeof(hevc_userdata_output_t));
++      memcpy((void *)&tc_vbuf->vid_reserved[26], &tccvoutput.stHEVCUserInfo, sizeof(hevc_userdata_output_t));
+     }
+ 
+-    vbuffer->m.planes[0].reserved[46] = tccvoutput.mColorFormat;
+-    vbuffer->m.planes[0].reserved[64] = tccvoutput.mDolbyHDREnable;
++    tc_vbuf->vid_reserved[46] = tccvoutput.mColorFormat;
++    tc_vbuf->vid_reserved[64] = tccvoutput.mDolbyHDREnable;
+ 
+ #if defined(_DOLBY_VISION_SUPPORT_)
+ 	//Dolby-Vision
+     if (tccvoutput.mDolbyHDREnable != 0)
+     {
+-      vbuffer->m.planes[0].reserved[65] = tccvoutput.dolbyVision_info.reg_addr;
+-      vbuffer->m.planes[0].reserved[66] = tccvoutput.dolbyVision_info.md_hdmi_addr;
+-      vbuffer->m.planes[0].reserved[74] = tccvoutput.dolbyVision_info.reg_out_type;
+-      vbuffer->m.planes[0].reserved[75] = tccvoutput.mContentType;
++      tc_vbuf->vid_reserved[65] = tccvoutput.dolbyVision_info.reg_addr;
++      tc_vbuf->vid_reserved[66] = tccvoutput.dolbyVision_info.md_hdmi_addr;
++      tc_vbuf->vid_reserved[74] = tccvoutput.dolbyVision_info.reg_out_type;
++      tc_vbuf->vid_reserved[75] = tccvoutput.mContentType;
+     }
+ #endif
+ 
+     if(tccvoutput.stSubTitileInfo.iSubEnable == 0)
+     {
+-      vbuffer->m.planes[0].reserved[1] = 1;
++      tc_vbuf->vid_reserved[1] = 1;
+     }
+     else
+     {
+-      vbuffer->m.planes[0].reserved[1] = 2;
+-      vbuffer->m.planes[1].reserved[0] = 0x1;
++      tc_vbuf->vid_reserved[1] = 2;
++      tc_vbuf->sub_reserved[0] = 0x1;
+ 
+-      vbuffer->m.planes[1].reserved[1] = tccvoutput.stSubTitileInfo.iSubEnable;
++      tc_vbuf->sub_reserved[1] = tccvoutput.stSubTitileInfo.iSubEnable;
+       vbuffer->m.planes[1].m.userptr = tccvoutput.stSubTitileInfo.iSubAddr;
+-      vbuffer->m.planes[1].reserved[2] = tccvoutput.stSubTitileInfo.iSubIdx;
++      tc_vbuf->sub_reserved[2] = tccvoutput.stSubTitileInfo.iSubIdx;
+ 
+-      vbuffer->m.planes[1].reserved[3] = V4L2_PIX_FMT_RGB32;
++      tc_vbuf->sub_reserved[3] = V4L2_PIX_FMT_RGB32;
+ 
+-      vbuffer->m.planes[1].reserved[4] = tccvoutput.stSubTitileInfo.iSubWidth;
+-      vbuffer->m.planes[1].reserved[5] = tccvoutput.stSubTitileInfo.iSubHeight;
+-      vbuffer->m.planes[1].reserved[6] = tccvoutput.stSubTitileInfo.iSuboffset_x;
+-      vbuffer->m.planes[1].reserved[7] = tccvoutput.stSubTitileInfo.iSuboffset_y;
++      tc_vbuf->sub_reserved[4] = tccvoutput.stSubTitileInfo.iSubWidth;
++      tc_vbuf->sub_reserved[5] = tccvoutput.stSubTitileInfo.iSubHeight;
++      tc_vbuf->sub_reserved[6] = tccvoutput.stSubTitileInfo.iSuboffset_x;
++      tc_vbuf->sub_reserved[7] = tccvoutput.stSubTitileInfo.iSuboffset_y;
+     }
+   }
+   else if(tccvoutput.mType == TYPE_IMAGE)
+   {
++    memset(tc_vbuf, 0, sizeof(struct tc_v4l2_buffer));
+     vbuffer->m.planes[0].m.userptr = tccvoutput.pCurrOut[0][0];
+ 
+-    vbuffer->m.planes[0].reserved[1] = 1;
+-    vbuffer->m.planes[0].reserved[2] = 0;
+-    vbuffer->m.planes[0].reserved[3] = 0;
++    tc_vbuf->vid_reserved[1] = 1;
++    tc_vbuf->vid_reserved[2] = 0;
++    tc_vbuf->vid_reserved[3] = 0;
+ 
+     vbuffer->timecode.type = 0xFF00;  /* To inform the kernel driver of this is image frame */
+ 
+     vbuffer->m.planes[0].bytesused = 0;
+ 
+-    vbuffer->m.planes[0].reserved[4] = GST_V4L2_WIDTH(v4l2object);
+-    vbuffer->m.planes[0].reserved[5] = GST_V4L2_HEIGHT(v4l2object);
++    tc_vbuf->vid_reserved[4] = GST_V4L2_WIDTH(v4l2object);
++    tc_vbuf->vid_reserved[5] = GST_V4L2_HEIGHT(v4l2object);
+ 
+-    vbuffer->m.planes[0].reserved[6] = 0;
+-    vbuffer->m.planes[0].reserved[7] = 0;
+-    vbuffer->m.planes[0].reserved[8] = GST_V4L2_WIDTH(v4l2object);
+-    vbuffer->m.planes[0].reserved[9] = GST_V4L2_HEIGHT(v4l2object);
++    tc_vbuf->vid_reserved[6] = 0;
++    tc_vbuf->vid_reserved[7] = 0;
++    tc_vbuf->vid_reserved[8] = GST_V4L2_WIDTH(v4l2object);
++    tc_vbuf->vid_reserved[9] = GST_V4L2_HEIGHT(v4l2object);
+   }
+   else
+   {
+-    GST_INFO_OBJECT(pool, "[%s:%d] Invalid type:%d\n", __FUNCTION__, __LINE__, tccvoutput.mType);
++    GST_INFO_OBJECT(pool, "Invalid type:%d\n", tccvoutput.mType);
+     gst_buffer_unmap(buf, &map);
+     return GST_FLOW_ERROR;
+   }
+@@ -1448,14 +1447,19 @@ static GstFlowReturn gst_v4l2_buffer_pool_qbuf_tc_process(GstV4l2BufferPool *poo
+   gst_buffer_unmap(buf, &map);
+   return GST_FLOW_OK;
+ }
++#endif
+ 
+ static GstFlowReturn
+ gst_v4l2_buffer_pool_qbuf (GstV4l2BufferPool * pool, GstBuffer * buf,
+     GstV4l2MemoryGroup * group, guint32 * frame_number)
+ {
+-  const GstV4l2Object *obj = pool->obj;
++  GstV4l2Object *obj = pool->obj;
+   gint old_buffer_state;
+   gint index;
++#ifdef TCC_V4L2SINK_DRIVER_USE
++  struct tc_v4l2_buffer *ptc_vbuf = &obj->tc_vbuf;
++  unsigned long reserved_addr;
++#endif
+ 
+   index = group->buffer.index;
+ 
+@@ -1495,22 +1499,56 @@ gst_v4l2_buffer_pool_qbuf (GstV4l2BufferPool * pool, GstBuffer * buf,
+ #ifdef TCC_V4L2SINK_DRIVER_USE
+   if(obj->mode == GST_V4L2_IO_USERPTR)
+   {
+-    gst_v4l2_buffer_pool_qbuf_tc_process(pool, buf, &group->buffer);
++    gst_v4l2_buffer_pool_qbuf_tc_process(pool, buf, &group->buffer, ptc_vbuf);
+   }
+   else
+   {
+     group->buffer.field = V4L2_FIELD_ANY;
+ 
+     memset(group->buffer.m.planes, 0x00, sizeof(struct v4l2_plane) * GST_VIDEO_TCC_MAX_PLANES);
+-
+-    group->buffer.m.planes[0].reserved[4]   = GST_V4L2_WIDTH(obj);
+-    group->buffer.m.planes[0].reserved[5]   = GST_V4L2_HEIGHT(obj);
+-    group->buffer.m.planes[0].reserved[6]   = 0;
+-    group->buffer.m.planes[0].reserved[7]   = 0;
+-    group->buffer.m.planes[0].reserved[8]   = GST_V4L2_WIDTH(obj);
+-    group->buffer.m.planes[0].reserved[9]   = GST_ROUND_DOWN_4(GST_V4L2_HEIGHT(obj));
++    memset(ptc_vbuf, 0, sizeof(struct tc_v4l2_buffer));
++
++    ptc_vbuf->vid_reserved[4]   = GST_V4L2_WIDTH(obj);
++    ptc_vbuf->vid_reserved[5]   = GST_V4L2_HEIGHT(obj);
++    ptc_vbuf->vid_reserved[6]   = 0;
++    ptc_vbuf->vid_reserved[7]   = 0;
++    ptc_vbuf->vid_reserved[8]   = GST_V4L2_WIDTH(obj);
++    ptc_vbuf->vid_reserved[9]   = GST_ROUND_DOWN_4(GST_V4L2_HEIGHT(obj));
+     group->buffer.m.planes[0].bytesused     = 0;
+   }
++
++  {
++    group->buffer.m.planes[0].reserved[0] = VIDEO_INFO_NUM;
++    reserved_addr = &ptc_vbuf->vid_reserved[0];
++    if (sizeof(unsigned long) > 4) {
++      /* 64 bits address */
++      group->buffer.m.planes[0].reserved[1] = (unsigned int)(reserved_addr & 0xFFFFFFFF);         /* low part */
++      group->buffer.m.planes[0].reserved[2] = (unsigned int)((reserved_addr >> 32) & 0xFFFFFFFF); /* high part */
++      //printf("[64bit] addr1 = 0x%08x%08x vid_reserved=%p\n", (reserved_addr >> 32), reserved_addr & 0xFFFFFFFF, tc_vbuf.vid_reserved);
++    } else {
++      /* 32 bits address */
++      group->buffer.m.planes[0].reserved[1] = reserved_addr;
++      group->buffer.m.planes[0].reserved[2] = 0;
++      //printf("[32bit] addr2 = 0x%08x vid_reserved=%p\n", reserved_addr, tc_vbuf.vid_reserved);
++    }
++
++    if (ptc_vbuf->sub_reserved[0] == 1) {
++      /* Set MPLANE_SUB */
++      group->buffer.m.planes[1].reserved[0] = SUBTITLE_INFO_NUM;
++      reserved_addr = &ptc_vbuf->sub_reserved[0];
++      if (sizeof(unsigned long) > 4) {
++        /* 64 bits address */
++        group->buffer.m.planes[1].reserved[1] = (unsigned int)(reserved_addr & 0xFFFFFFFF);         /* low part */
++        group->buffer.m.planes[1].reserved[2] = (unsigned int)((reserved_addr >> 32) & 0xFFFFFFFF); /* high part */
++        //printf("[64bit] sub addr1 = 0x%08x%08x\n", (reserved_addr >> 32), reserved_addr & 0xFFFFFFFF);
++      } else {
++        /* 32 bits address */
++        group->buffer.m.planes[1].reserved[1] = reserved_addr;
++        group->buffer.m.planes[1].reserved[2] = 0;
++        //printf("[32bit] sub addr2 = 0x%08x\n", reserved_addr);
++      }
++    }
++  }
+ #endif
+ 
+   GST_OBJECT_LOCK (pool);
+diff --git a/sys/v4l2/gstv4l2object.c b/sys/v4l2/gstv4l2object.c
+index 35d37e5..5a0a733 100644
+--- a/sys/v4l2/gstv4l2object.c
++++ b/sys/v4l2/gstv4l2object.c
+@@ -4886,6 +4886,9 @@ void gst_v4l2_object_set_connected_tcvdec(GstV4l2Object * v4l2object,gboolean fl
+   if(v4l2object)
+   {
+     v4l2object->isConnectedTcDec = flag;
++#ifdef TCC_V4L2SINK_DRIVER_USE
++    memset(&v4l2object->tc_vbuf, 0, sizeof(struct tc_v4l2_buffer));
++#endif
+   }
+ #endif
+ }
+diff --git a/sys/v4l2/gstv4l2object.h b/sys/v4l2/gstv4l2object.h
+index ae93ddc..14e05b9 100644
+--- a/sys/v4l2/gstv4l2object.h
++++ b/sys/v4l2/gstv4l2object.h
+@@ -153,6 +153,15 @@ typedef gulong ioctl_req_t;
+     return FALSE;						\
+   }
+ 
++#ifdef TCC_V4L2SINK_DRIVER_USE
++#define VIDEO_INFO_NUM 80
++#define SUBTITLE_INFO_NUM 8
++
++struct tc_v4l2_buffer {
++  unsigned int vid_reserved[VIDEO_INFO_NUM];
++  unsigned int sub_reserved[SUBTITLE_INFO_NUM];
++};
++#endif
+ 
+ struct _GstV4l2Object {
+   GstElement * element;
+@@ -221,6 +230,7 @@ struct _GstV4l2Object {
+ 
+   /* for crop source img */
+   struct v4l2_crop crop;
++  struct tc_v4l2_buffer tc_vbuf;
+ #endif
+   /* lists... */
+   GSList *formats;              /* list of available capture formats */

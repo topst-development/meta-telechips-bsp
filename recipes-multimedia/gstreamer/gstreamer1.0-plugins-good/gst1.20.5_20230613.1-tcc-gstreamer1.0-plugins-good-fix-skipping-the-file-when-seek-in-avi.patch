@@ -1,0 +1,62 @@
+From 267e92ab2827203f3056829e9eae93e8cb71b722 Mon Sep 17 00:00:00 2001
+From: "hoon.bae" <hoon.bae@telechips.com>
+Date: Tue, 13 Jun 2023 13:29:41 +0900
+Subject: [PATCH] [fix] Fix skipping the file when seek in avi
+
+Sympthom : Skip the avi file when seeking
+
+Cause : the codec_data in header is invalid.
+
+Solution : checking avc forcc . check codec_data when avc or avc1 format
+
+TCS : QSD807XL-42
+---
+ gst/avi/gstavidemux.c | 10 +++++++++-
+ gst/avi/gstavidemux.h |  3 +++
+ 2 files changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/gst/avi/gstavidemux.c b/gst/avi/gstavidemux.c
+index bec056c..71b5e0c 100644
+--- a/gst/avi/gstavidemux.c
++++ b/gst/avi/gstavidemux.c
+@@ -1977,7 +1977,7 @@ gst_avi_demux_check_caps (GstAviDemux * avi, GstAviStream * stream,
+         guint32 h = GST_READ_UINT32_BE (data);
+ 
+         gst_buffer_unmap (buf, &map);
+-        if (h == 0x01 || (h >> 8) == 0x01) {
++        if (h == 0x01 || (h >> 8) == 0x01 || (stream->is_avc == FALSE)) {
+           /* can hardly be valid AVC codec data */
+           GST_DEBUG_OBJECT (avi,
+               "discarding invalid codec_data containing byte-stream");
+@@ -2412,6 +2412,14 @@ gst_avi_demux_parse_stream (GstAviDemux * avi, GstBuffer * buf)
+       caps = gst_riff_create_video_caps (fourcc, stream->strh,
+           stream->strf.vids, stream->extradata, stream->initdata, &codec_name);
+ 
++	    /* FIXME: Can you trust the fourcc data?*/
++      if (caps &&
++          ((fourcc == GST_MAKE_FOURCC ('a', 'v', 'c', '1')) ||
++           (fourcc == GST_MAKE_FOURCC ('A', 'V', 'C', '1')))) {
++        stream->is_avc = TRUE;
++      }
++	    else stream->is_avc = FALSE;
++
+       /* DXSB is XSUB, and it is placed inside a vids */
+       if (!caps || (fourcc != GST_MAKE_FOURCC ('D', 'X', 'S', 'B') &&
+               fourcc != GST_MAKE_FOURCC ('D', 'X', 'S', 'A'))) {
+diff --git a/gst/avi/gstavidemux.h b/gst/avi/gstavidemux.h
+index 22e46a2..ad259f8 100644
+--- a/gst/avi/gstavidemux.h
++++ b/gst/avi/gstavidemux.h
+@@ -107,6 +107,9 @@ typedef struct {
+   /* VBR indicator */
+   gboolean       is_vbr;
+ 
++  /* AVC indicator */
++  gboolean       is_avc;
++
+   /* openDML support (for files >4GB) */
+   gboolean       superindex;
+   guint64       *indexes;
+-- 
+2.25.1
+

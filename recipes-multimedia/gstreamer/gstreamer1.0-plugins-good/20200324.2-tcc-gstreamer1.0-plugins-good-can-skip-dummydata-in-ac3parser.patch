@@ -1,0 +1,57 @@
+diff --git a/gst/audioparsers/gstac3parse.c b/gst/audioparsers/gstac3parse.c
+index 64b3ca3..2b73938 100644
+--- a/gst/audioparsers/gstac3parse.c
++++ b/gst/audioparsers/gstac3parse.c
+@@ -529,14 +529,8 @@ gst_ac3_parse_handle_frame (GstBaseParse * parse,
+     goto cleanup;
+   }
+ 
+-  /* possible frame header, but not at offset 0? skip bytes before sync */
+-  if (off > 0) {
+-    *skipsize = off;
+-    goto cleanup;
+-  }
+-
+   /* make sure the values in the frame header look sane */
+-  if (!gst_ac3_parse_frame_header (ac3parse, buf, 0, &frmsiz, &rate, &chans,
++  if (!gst_ac3_parse_frame_header (ac3parse, buf, off, &frmsiz, &rate, &chans,
+           &blocks, &sid, &eac)) {
+     *skipsize = off + 2;
+     goto cleanup;
+@@ -547,6 +541,18 @@ gst_ac3_parse_handle_frame (GstBaseParse * parse,
+ 
+   framesize = frmsiz;
+ 
++  /* possible frame header, but not at offset 0? skip bytes before sync */
++  if (off > 0) {
++ 	if ((framesize + off) > map.size)
++	{
++	    *skipsize = off;
++    	goto cleanup;
++	}
++	else
++	{
++	    gst_base_parse_skip_offset(parse,off);
++	}	      
++  }
+   if (G_UNLIKELY (g_atomic_int_get (&ac3parse->align) ==
+           GST_AC3_PARSE_ALIGN_NONE))
+     gst_ac3_parse_set_alignment (ac3parse, eac);
+@@ -584,7 +590,7 @@ gst_ac3_parse_handle_frame (GstBaseParse * parse,
+           break;
+         }
+ 
+-        if (!gst_ac3_parse_frame_header (ac3parse, buf, framesize, &frmsiz,
++        if (!gst_ac3_parse_frame_header (ac3parse, buf, framesize+off, &frmsiz,
+                 NULL, NULL, NULL, &sid, &eac)) {
+           *skipsize = off + 2;
+           goto cleanup;
+@@ -601,7 +607,7 @@ gst_ac3_parse_handle_frame (GstBaseParse * parse,
+ 
+     GST_DEBUG_OBJECT (ac3parse, "resyncing; checking next frame syncword");
+ 
+-    if (more || !gst_byte_reader_skip (&reader, frmsiz) ||
++    if (more || !gst_byte_reader_skip (&reader, frmsiz+off) ||
+         !gst_byte_reader_get_uint16_be (&reader, &word)) {
+       GST_DEBUG_OBJECT (ac3parse, "... but not sufficient data");
+       gst_base_parse_set_min_frame_size (parse, framesize + 8);

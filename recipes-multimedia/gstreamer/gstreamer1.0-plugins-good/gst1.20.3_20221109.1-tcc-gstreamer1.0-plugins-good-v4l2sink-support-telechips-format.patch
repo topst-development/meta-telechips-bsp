@@ -1,0 +1,2041 @@
+diff --git a/sys/v4l2/ext/videodev2.h b/sys/v4l2/ext/videodev2.h
+index 24832ee..91f3162 100644
+--- a/sys/v4l2/ext/videodev2.h
++++ b/sys/v4l2/ext/videodev2.h
+@@ -983,7 +983,7 @@ struct v4l2_plane {
+ 		__s32		fd;
+ 	} m;
+ 	__u32			data_offset;
+-	__u32			reserved[11];
++	__u32			reserved[64];
+ };
+ 
+ /**
+diff --git a/sys/v4l2/gstv4l2allocator.c b/sys/v4l2/gstv4l2allocator.c
+index 48d1bb8..3d093ac 100644
+--- a/sys/v4l2/gstv4l2allocator.c
++++ b/sys/v4l2/gstv4l2allocator.c
+@@ -229,6 +229,14 @@ gst_v4l2_memory_group_free (GstV4l2MemoryGroup * group)
+ {
+   gint i;
+ 
++#if TCC_V4L2SINK_DRIVER_USE
++  if ( group->buffer.m.planes != NULL )
++  {
++    free(group->buffer.m.planes);
++    group->buffer.m.planes = NULL;
++  }
++#endif
++
+   for (i = 0; i < group->n_mem; i++) {
+     GstMemory *mem = group->mem[i];
+     group->mem[i] = NULL;
+@@ -238,7 +246,7 @@ gst_v4l2_memory_group_free (GstV4l2MemoryGroup * group)
+ 
+   g_slice_free (GstV4l2MemoryGroup, group);
+ }
+-
++#define GST_VIDEO_TCC_MAX_PLANES 2
+ static GstV4l2MemoryGroup *
+ gst_v4l2_memory_group_new (GstV4l2Allocator * allocator, guint32 index)
+ {
+@@ -249,7 +257,9 @@ gst_v4l2_memory_group_new (GstV4l2Allocator * allocator, guint32 index)
+   gsize img_size, buf_size;
+ 
+   group = g_slice_new0 (GstV4l2MemoryGroup);
+-
++#ifdef TCC_V4L2SINK_DRIVER_USE
++  memset(&group->buffer, 0x0, sizeof(struct v4l2_buffer));
++#endif
+   group->buffer.type = format->type;
+   group->buffer.index = index;
+   group->buffer.memory = memory;
+@@ -260,7 +270,13 @@ gst_v4l2_memory_group_new (GstV4l2Allocator * allocator, guint32 index)
+   } else {
+     group->n_mem = 1;
+   }
+-
++#ifdef TCC_V4L2SINK_DRIVER_USE
++  if (memory == V4L2_MEMORY_MMAP)
++  {
++    group->buffer.m.planes = malloc(sizeof(struct v4l2_plane) * GST_VIDEO_TCC_MAX_PLANES);
++    memset(group->buffer.m.planes, 0x00, sizeof(struct v4l2_plane) * GST_VIDEO_TCC_MAX_PLANES);
++  }
++#endif
+   if (obj->ioctl (obj->video_fd, VIDIOC_QUERYBUF, &group->buffer) < 0)
+     goto querybuf_failed;
+ 
+@@ -429,6 +445,7 @@ gst_v4l2_allocator_finalize (GObject * obj)
+ 
+   GST_LOG_OBJECT (obj, "called");
+ 
++  //v4l2_close (allocator->video_fd); ????????? need it???
+   gst_atomic_queue_unref (allocator->free_queue);
+   gst_object_unref (allocator->obj->element);
+ 
+@@ -498,9 +515,10 @@ gst_v4l2_allocator_probe (GstV4l2Allocator * allocator, guint32 memory,
+ 
+     bcreate.memory = memory;
+     bcreate.format = obj->format;
+-
++#ifdef VIDIOC_CREATE_BUFS
+     if ((obj->ioctl (obj->video_fd, VIDIOC_CREATE_BUFS, &bcreate) == 0))
+       flags |= bcreate_flag;
++#endif
+   }
+ 
+   if (breq.capabilities & V4L2_BUF_CAP_SUPPORTS_ORPHANED_BUFS)
+@@ -530,10 +548,10 @@ gst_v4l2_allocator_create_buf (GstV4l2Allocator * allocator)
+ 
+   if (!allocator->can_allocate)
+     goto done;
+-
++#ifdef VIDIOC_CREATE_BUFS
+   if (obj->ioctl (obj->video_fd, VIDIOC_CREATE_BUFS, &bcreate) < 0)
+     goto create_bufs_failed;
+-
++#endif
+   if (allocator->groups[bcreate.index] != NULL)
+     goto create_bufs_bug;
+ 
+@@ -579,6 +597,7 @@ gst_v4l2_allocator_alloc (GstV4l2Allocator * allocator)
+ 
+   group = gst_atomic_queue_pop (allocator->free_queue);
+ 
++#ifdef VIDIOC_CREATE_BUFS
+   if (group == NULL) {
+     if (allocator->can_allocate) {
+       group = gst_v4l2_allocator_create_buf (allocator);
+@@ -588,7 +607,7 @@ gst_v4l2_allocator_alloc (GstV4l2Allocator * allocator)
+         allocator->can_allocate = FALSE;
+     }
+   }
+-
++#endif
+   return group;
+ }
+ 
+@@ -841,12 +860,25 @@ gst_v4l2_allocator_alloc_mmap (GstV4l2Allocator * allocator)
+   for (i = 0; i < group->n_mem; i++) {
+     if (group->mem[i] == NULL) {
+       gpointer data;
++#ifdef TCC_V4L2SINK_DRIVER_USE
++      data = obj->mmap (NULL, group->buffer.m.planes[0].length, PROT_READ | PROT_WRITE,
++          MAP_SHARED, obj->video_fd, group->buffer.m.planes[0].m.mem_offset);
++#else
+       data = obj->mmap (NULL, group->planes[i].length, PROT_READ | PROT_WRITE,
+           MAP_SHARED, obj->video_fd, group->planes[i].m.mem_offset);
+-
++#endif
+       if (data == MAP_FAILED)
+         goto mmap_failed;
+ 
++#ifdef TCC_V4L2SINK_DRIVER_USE
++      GST_LOG_OBJECT (allocator,
++          "mmap buffer length %d, data offset %d, plane %d",
++          group->buffer.m.planes[0].length, group->buffer.m.planes[0].m.mem_offset, i);
++
++      group->mem[i] = (GstMemory *) _v4l2mem_new (0, GST_ALLOCATOR (allocator),
++          NULL, group->buffer.m.planes[0].length, 0, 0, group->buffer.m.planes[0].length, i, data,
++          -1, group);
++#else
+       GST_LOG_OBJECT (allocator,
+           "mmap buffer length %d, data offset %d, plane %d",
+           group->planes[i].length, group->planes[i].data_offset, i);
+@@ -854,6 +886,7 @@ gst_v4l2_allocator_alloc_mmap (GstV4l2Allocator * allocator)
+       group->mem[i] = (GstMemory *) _v4l2mem_new (0, GST_ALLOCATOR (allocator),
+           NULL, group->planes[i].length, 0, 0, group->planes[i].length, i, data,
+           -1, group);
++#endif
+     } else {
+       /* Take back the allocator reference */
+       gst_object_ref (allocator);
+@@ -1256,6 +1289,7 @@ gst_v4l2_allocator_qbuf (GstV4l2Allocator * allocator,
+   g_return_val_if_fail (g_atomic_int_get (&allocator->active), FALSE);
+ 
+   /* update sizes */
++#ifndef TCC_V4L2SINK_DRIVER_USE
+   if (V4L2_TYPE_IS_MULTIPLANAR (obj->type)) {
+     for (i = 0; i < group->n_mem; i++)
+       group->planes[i].bytesused =
+@@ -1263,6 +1297,7 @@ gst_v4l2_allocator_qbuf (GstV4l2Allocator * allocator,
+   } else {
+     group->buffer.bytesused = gst_memory_get_sizes (group->mem[0], NULL, NULL);
+   }
++#endif
+ 
+   /* Ensure the memory will stay around and is RO */
+   for (i = 0; i < group->n_mem; i++)
+diff --git a/sys/v4l2/gstv4l2bufferpool.c b/sys/v4l2/gstv4l2bufferpool.c
+index d85f036..5ffe6a1 100644
+--- a/sys/v4l2/gstv4l2bufferpool.c
++++ b/sys/v4l2/gstv4l2bufferpool.c
+@@ -223,6 +223,37 @@ _unmap_userptr_frame (struct UserPtrData *data)
+   g_slice_free (struct UserPtrData, data);
+ }
+ 
++#ifdef TCC_V4L2SINK_DRIVER_USE
++void gst_v4l2_buffer_copy_meta_for_tc(GstBuffer * dest, GstBuffer * src,GstMeta *meta)
++{
++  if(meta)
++  {
++    const GstMetaInfo *info = meta->info;
++
++    /* Don't copy memory metas if we only copied part of the buffer, didn't
++     * copy memories or merged memories. In all these cases the memory
++     * structure has changed and the memory meta becomes meaningless.
++     */
++    if (info->transform_func)
++    {
++      GstMetaTransformCopy copy_data;
++
++      copy_data.region = FALSE;
++      copy_data.offset = 0;
++      copy_data.size = -1;
++
++      if (!info->transform_func (dest, meta, src,
++         _gst_meta_transform_copy, &copy_data))
++      {
++       //GST_CAT_ERROR (GST_CAT_BUFFER,
++       //  "failed to copy meta %p of API type %s", meta,
++       //  g_type_name (info->api));
++      }
++    }
++  }
++}
++#endif
++
+ static GstFlowReturn
+ gst_v4l2_buffer_pool_import_userptr (GstV4l2BufferPool * pool,
+     GstBuffer * dest, GstBuffer * src)
+@@ -245,9 +276,13 @@ gst_v4l2_buffer_pool_import_userptr (GstV4l2BufferPool * pool,
+     flags = GST_MAP_WRITE;
+ 
+   data = g_slice_new0 (struct UserPtrData);
+-
++#ifdef TCC_V4L2SINK_DRIVER_USE
++  if(0)
++#else
+   if (finfo && (finfo->format != GST_VIDEO_FORMAT_UNKNOWN &&
+-          finfo->format != GST_VIDEO_FORMAT_ENCODED)) {
++          finfo->format != GST_VIDEO_FORMAT_ENCODED))
++#endif
++  {
+     gsize size[GST_VIDEO_MAX_PLANES] = { 0, };
+     gint i;
+ 
+@@ -322,6 +357,14 @@ gst_v4l2_buffer_pool_import_userptr (GstV4l2BufferPool * pool,
+   gst_buffer_copy_into (dest, src,
+       GST_BUFFER_COPY_FLAGS | GST_BUFFER_COPY_TIMESTAMPS, 0, -1);
+ 
++  #ifdef TCC_V4L2SINK_DRIVER_USE
++  if(gst_v4l2_object_is_connected_tcvdec(pool->obj))
++  {
++    GstVideoMeta *meta = gst_buffer_get_video_meta(src);
++    gst_v4l2_buffer_copy_meta_for_tc(dest, src, meta);
++  }
++  #endif
++
+   return ret;
+ 
+ not_our_buffer:
+@@ -867,9 +910,15 @@ gst_v4l2_buffer_pool_start (GstBufferPool * bpool)
+       can_allocate =
+           GST_V4L2_ALLOCATOR_CAN_ALLOCATE (pool->vallocator, USERPTR);
+ 
+-      GST_DEBUG_OBJECT (pool, "requesting %d USERPTR buffers", min_buffers);
++      guint32 num_buffer;
++#ifdef TCC_V4L2SINK_DRIVER_USE
++      num_buffer = GST_V4L2_MAX_BUFFERS;
++#else
++      num_buffer = min_buffers;
++#endif
++      GST_DEBUG_OBJECT (pool, "requesting__ %d USERPTR buffers", num_buffer);
+ 
+-      count = gst_v4l2_allocator_start (pool->vallocator, min_buffers,
++      count = gst_v4l2_allocator_start (pool->vallocator, num_buffer,
+           V4L2_MEMORY_USERPTR);
+       pool->num_allocated = count;
+ 
+@@ -1082,6 +1131,11 @@ gst_v4l2_buffer_pool_flush_start (GstBufferPool * bpool)
+ {
+   GstV4l2BufferPool *pool = GST_V4L2_BUFFER_POOL (bpool);
+ 
++#ifdef TCC_V4L2SINK_DRIVER_USE
++  GST_DEBUG_OBJECT (pool, "skip start flushing");
++  return;
++#endif
++
+   GST_DEBUG_OBJECT (pool, "start flushing");
+ 
+   gst_poll_set_flushing (pool->poll, TRUE);
+@@ -1100,6 +1154,10 @@ gst_v4l2_buffer_pool_flush_stop (GstBufferPool * bpool)
+ {
+   GstV4l2BufferPool *pool = GST_V4L2_BUFFER_POOL (bpool);
+ 
++#ifdef TCC_V4L2SINK_DRIVER_USE
++  GST_DEBUG_OBJECT (pool, "skip stop flushing");
++  return;
++#endif
+   GST_DEBUG_OBJECT (pool, "stop flushing");
+ 
+   if (pool->other_pool && gst_buffer_pool_is_active (pool->other_pool))
+@@ -1218,6 +1276,179 @@ dqevent_failed:
+   }
+ }
+ 
++static GstFlowReturn gst_v4l2_buffer_pool_qbuf_tc_process(GstV4l2BufferPool *pool, GstBuffer *buf, struct v4l2_buffer *vbuffer)
++{
++  GstV4l2Object *v4l2object = pool->obj;
++  GstMapInfo map = GST_MAP_INFO_INIT;
++  tcc_video_out_info tccvoutput;
++  GstClockTime timestamp;
++
++  if(!gst_buffer_map(buf, &map, GST_MAP_READ))
++    return GST_FLOW_ERROR;
++
++  memcpy(&tccvoutput, map.data, sizeof(tcc_video_out_info));
++
++  if(G_LIKELY(tccvoutput.mType == TYPE_VIDEO))
++  {
++    vbuffer->sequence = tccvoutput.mDispIdx;
++
++    if(tccvoutput.mFlags & (DEC_FLAGS_USE_10BIT_2BYTE | DEC_FLAGS_USE_10BIT_REAL))
++    {
++       vbuffer->flags |= (tccvoutput.mFlags & DEC_FLAGS_USE_10BIT_2BYTE)
++                ? DEC_FLAGS_USE_10BIT_2BYTE : DEC_FLAGS_USE_10BIT_REAL;
++    }
++
++    if(tccvoutput.mFlags & DEC_FLAGS_INTERLACED)
++    {
++      if(tccvoutput.mFlags & DEC_FLAGS_INTERLACED_ODD_FIRST)
++      {
++        vbuffer->field = V4L2_FIELD_INTERLACED_BT;
++      }
++      else
++      {
++        vbuffer->field = V4L2_FIELD_INTERLACED_TB;
++      }
++    }
++    else
++    {
++      vbuffer->field = V4L2_FIELD_ANY;
++    }
++
++    GST_INFO_OBJECT(pool, "map.data %p, v_out buf %p", map.data,tccvoutput.pCurrOut[0][0]);
++
++    vbuffer->m.planes[0].m.userptr = tccvoutput.pCurrOut[0][0];
++    vbuffer->m.planes[0].reserved[2] = tccvoutput.pCurrOut[0][1];
++    vbuffer->m.planes[0].reserved[3] = tccvoutput.pCurrOut[0][2];
++
++    vbuffer->m.planes[0].bytesused = tccvoutput.stStride.iY;
++
++    vbuffer->m.planes[0].reserved[4] = tccvoutput.mWidth;
++    vbuffer->m.planes[0].reserved[5] = tccvoutput.mHeight;
++
++    if ((v4l2object != NULL) &&
++       ( v4l2object->crop.c.top != 0   ||  v4l2object->crop.c.left != 0
++      || v4l2object->crop.c.width != 0 ||  v4l2object->crop.c.height != 0 ))
++    {
++      GST_DEBUG_OBJECT(pool, "v4l2bufferpool new crop top=%d, left=%d, width=%d, height=%d\n",
++        v4l2object->crop.c.top, v4l2object->crop.c.left, v4l2object->crop.c.width, v4l2object->crop.c.height);
++      vbuffer->m.planes[0].reserved[6] = v4l2object->crop.c.left;
++      vbuffer->m.planes[0].reserved[7] = v4l2object->crop.c.top;
++      vbuffer->m.planes[0].reserved[8] = v4l2object->crop.c.width;
++      vbuffer->m.planes[0].reserved[9] = v4l2object->crop.c.height;
++    }
++    else
++    {
++    vbuffer->m.planes[0].reserved[6] = tccvoutput.stCropInfo.iCropLeft;
++    vbuffer->m.planes[0].reserved[7] = tccvoutput.stCropInfo.iCropTop;
++    vbuffer->m.planes[0].reserved[8] = tccvoutput.stCropInfo.iCropWidth;
++    vbuffer->m.planes[0].reserved[9] = tccvoutput.stCropInfo.iCropHeight;
++    }
++
++    if(tccvoutput.mFlags & DEC_FLAGS_USE_MAP_CONV)
++    {
++      vbuffer->m.planes[0].reserved[10] = 1;
++#if 0
++        memcpy((void *)&vbuffer->m.planes[0].reserved[11], &tccvoutput.stHEVCMapConv, sizeof(hevc_dec_MapConv_info_t));
++#else
++        vbuffer->m.planes[0].reserved[11] = (unsigned int)tccvoutput.stHEVCMapConv.m_CompressedY[0];
++        vbuffer->m.planes[0].reserved[12] = 0;//(unsigned int)tccvoutput.stHEVCMapConv.m_CompressedY[1];
++        vbuffer->m.planes[0].reserved[13] = (unsigned int)tccvoutput.stHEVCMapConv.m_CompressedCb[0];
++        vbuffer->m.planes[0].reserved[14] = 0;//(unsigned int)tccvoutput.stHEVCMapConv.m_CompressedCb[1];
++
++        vbuffer->m.planes[0].reserved[15] = (unsigned int)tccvoutput.stHEVCMapConv.m_FbcYOffsetAddr[0];
++        vbuffer->m.planes[0].reserved[16] = 0;//(unsigned int)tccvoutput.stHEVCMapConv.m_FbcYOffsetAddr[1];
++        vbuffer->m.planes[0].reserved[17] = (unsigned int)tccvoutput.stHEVCMapConv.m_FbcCOffsetAddr[0];
++        vbuffer->m.planes[0].reserved[18] = 0;//(unsigned int)tccvoutput.stHEVCMapConv.m_FbcCOffsetAddr[1];
++
++        vbuffer->m.planes[0].reserved[19] = tccvoutput.stHEVCMapConv.m_uiLumaStride;
++        vbuffer->m.planes[0].reserved[20] = tccvoutput.stHEVCMapConv.m_uiChromaStride;
++        vbuffer->m.planes[0].reserved[21] = tccvoutput.stHEVCMapConv.m_uiLumaBitDepth;
++        vbuffer->m.planes[0].reserved[22] = tccvoutput.stHEVCMapConv.m_uiChromaBitDepth;
++        vbuffer->m.planes[0].reserved[23] = tccvoutput.stHEVCMapConv.m_uiFrameEndian;
++        vbuffer->m.planes[0].reserved[24] = tccvoutput.stHEVCMapConv.m_Reserved[0]; //Codec Type (HEVC:15, VP9:16)
++#endif
++    }
++    else if(tccvoutput.mFlags & DEC_FLAGS_USE_DTRC)
++    {
++        vbuffer->m.planes[0].reserved[10] = 2;
++        memcpy((void *)&vbuffer->m.planes[0].reserved[11], &tccvoutput.stDTRCInfo, sizeof(vp9_compressed_info_t));
++    }
++    else
++    {
++      vbuffer->m.planes[0].reserved[10] = 0;
++    }
++
++    if(tccvoutput.mHEVCUserDataEnalbe != 0)
++    {
++      memcpy((void *)&vbuffer->m.planes[0].reserved[26], &tccvoutput.stHEVCUserInfo, sizeof(hevc_userdata_output_t));
++    }
++
++    vbuffer->m.planes[0].reserved[46] = tccvoutput.mColorFormat;
++    vbuffer->m.planes[0].reserved[64] = tccvoutput.mDolbyHDREnable;
++
++#if defined(_DOLBY_VISION_SUPPORT_)
++	//Dolby-Vision
++    if (tccvoutput.mDolbyHDREnable != 0)
++    {
++      vbuffer->m.planes[0].reserved[65] = tccvoutput.dolbyVision_info.reg_addr;
++      vbuffer->m.planes[0].reserved[66] = tccvoutput.dolbyVision_info.md_hdmi_addr;
++      vbuffer->m.planes[0].reserved[74] = tccvoutput.dolbyVision_info.reg_out_type;
++      vbuffer->m.planes[0].reserved[75] = tccvoutput.mContentType;
++    }
++#endif
++
++    if(tccvoutput.stSubTitileInfo.iSubEnable == 0)
++    {
++      vbuffer->m.planes[0].reserved[1] = 1;
++    }
++    else
++    {
++      vbuffer->m.planes[0].reserved[1] = 2;
++      vbuffer->m.planes[1].reserved[0] = 0x1;
++
++      vbuffer->m.planes[1].reserved[1] = tccvoutput.stSubTitileInfo.iSubEnable;
++      vbuffer->m.planes[1].m.userptr = tccvoutput.stSubTitileInfo.iSubAddr;
++      vbuffer->m.planes[1].reserved[2] = tccvoutput.stSubTitileInfo.iSubIdx;
++
++      vbuffer->m.planes[1].reserved[3] = V4L2_PIX_FMT_RGB32;
++
++      vbuffer->m.planes[1].reserved[4] = tccvoutput.stSubTitileInfo.iSubWidth;
++      vbuffer->m.planes[1].reserved[5] = tccvoutput.stSubTitileInfo.iSubHeight;
++      vbuffer->m.planes[1].reserved[6] = tccvoutput.stSubTitileInfo.iSuboffset_x;
++      vbuffer->m.planes[1].reserved[7] = tccvoutput.stSubTitileInfo.iSuboffset_y;
++    }
++  }
++  else if(tccvoutput.mType == TYPE_IMAGE)
++  {
++    vbuffer->m.planes[0].m.userptr = tccvoutput.pCurrOut[0][0];
++
++    vbuffer->m.planes[0].reserved[1] = 1;
++    vbuffer->m.planes[0].reserved[2] = 0;
++    vbuffer->m.planes[0].reserved[3] = 0;
++
++    vbuffer->timecode.type = 0xFF00;  /* To inform the kernel driver of this is image frame */
++
++    vbuffer->m.planes[0].bytesused = 0;
++
++    vbuffer->m.planes[0].reserved[4] = GST_V4L2_WIDTH(v4l2object);
++    vbuffer->m.planes[0].reserved[5] = GST_V4L2_HEIGHT(v4l2object);
++
++    vbuffer->m.planes[0].reserved[6] = 0;
++    vbuffer->m.planes[0].reserved[7] = 0;
++    vbuffer->m.planes[0].reserved[8] = GST_V4L2_WIDTH(v4l2object);
++    vbuffer->m.planes[0].reserved[9] = GST_V4L2_HEIGHT(v4l2object);
++  }
++  else
++  {
++    GST_INFO_OBJECT(pool, "[%s:%d] Invalid type:%d\n", __FUNCTION__, __LINE__, tccvoutput.mType);
++    gst_buffer_unmap(buf, &map);
++    return GST_FLOW_ERROR;
++  }
++
++  gst_buffer_unmap(buf, &map);
++  return GST_FLOW_OK;
++}
++
+ static GstFlowReturn
+ gst_v4l2_buffer_pool_qbuf (GstV4l2BufferPool * pool, GstBuffer * buf,
+     GstV4l2MemoryGroup * group, guint32 * frame_number)
+@@ -1261,6 +1492,27 @@ gst_v4l2_buffer_pool_qbuf (GstV4l2BufferPool * pool, GstBuffer * buf,
+     }
+   }
+ 
++#ifdef TCC_V4L2SINK_DRIVER_USE
++  if(obj->mode == GST_V4L2_IO_USERPTR)
++  {
++    gst_v4l2_buffer_pool_qbuf_tc_process(pool, buf, &group->buffer);
++  }
++  else
++  {
++    group->buffer.field = V4L2_FIELD_ANY;
++
++    memset(group->buffer.m.planes, 0x00, sizeof(struct v4l2_plane) * GST_VIDEO_TCC_MAX_PLANES);
++
++    group->buffer.m.planes[0].reserved[4]   = GST_V4L2_WIDTH(obj);
++    group->buffer.m.planes[0].reserved[5]   = GST_V4L2_HEIGHT(obj);
++    group->buffer.m.planes[0].reserved[6]   = 0;
++    group->buffer.m.planes[0].reserved[7]   = 0;
++    group->buffer.m.planes[0].reserved[8]   = GST_V4L2_WIDTH(obj);
++    group->buffer.m.planes[0].reserved[9]   = GST_ROUND_DOWN_4(GST_V4L2_HEIGHT(obj));
++    group->buffer.m.planes[0].bytesused     = 0;
++  }
++#endif
++
+   GST_OBJECT_LOCK (pool);
+ 
+   /* If the pool was orphaned, don't try to queue any returned buffers.
+@@ -2286,6 +2538,183 @@ start_failed:
+   }
+ }
+ 
++/**
++ * gst_v4l2_buffer_pool_preroll_process:
++ * @bpool: a #GstBufferPool
++ * @buf: a #GstBuffer, maybe be replaced
++ *
++ * Process @buf in @bpool. For output devices, this functions send the contents of
++ * @buf to the device for playback.
++ *
++ * Returns: %GST_FLOW_OK on success.
++ */
++GstFlowReturn
++gst_v4l2_buffer_pool_preroll_process (GstV4l2BufferPool * pool, GstBuffer ** buf)
++{
++  GstFlowReturn ret = GST_FLOW_OK;
++  GstBufferPool *bpool = GST_BUFFER_POOL_CAST (pool);
++  GstV4l2Object *obj = pool->obj;
++
++  GST_DEBUG_OBJECT (pool, "process buffer %p", buf);
++
++  if (GST_BUFFER_POOL_IS_FLUSHING (pool))
++    return GST_FLOW_FLUSHING;
++
++  switch (obj->type) {
++    case V4L2_BUF_TYPE_VIDEO_OUTPUT:
++    case V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE:
++      /* playback */
++      switch (obj->mode) {
++        case GST_V4L2_IO_RW:
++          /* FIXME, do write() */
++          GST_WARNING_OBJECT (pool, "implement write()");
++          break;
++
++        case GST_V4L2_IO_USERPTR:
++        case GST_V4L2_IO_DMABUF_IMPORT:
++        case GST_V4L2_IO_DMABUF:
++        case GST_V4L2_IO_MMAP:
++        {
++          GstBuffer *to_queue = NULL;
++          GstBuffer *buffer;
++          GstV4l2MemoryGroup *group;
++          gint index;
++
++          if ((*buf)->pool != bpool)
++            goto copying;
++
++          if (!gst_v4l2_is_buffer_valid (*buf, &group))
++            goto copying;
++
++          index = group->buffer.index;
++
++          GST_LOG_OBJECT (pool, "processing buffer %i from our pool", index);
++
++          if (pool->buffers[index] != NULL) {
++            GST_LOG_OBJECT (pool, "buffer %i already queued, copying", index);
++            goto copying;
++          }
++
++          /* we can queue directly */
++          to_queue = gst_buffer_ref (*buf);
++
++        copying:
++          if (to_queue == NULL) {
++            GstBufferPoolAcquireParams params = { 0 };
++
++            if(!pool->streaming) {
++              if(!gst_v4l2_buffer_pool_streamon (pool))
++                goto start_failed;
++            }
++
++            GST_LOG_OBJECT (pool, "alloc buffer from our pool");
++
++            /* this can return EOS if all buffers are outstanding which would
++             * be strange because we would expect the upstream element to have
++             * allocated them and returned to us.. */
++            params.flags = GST_BUFFER_POOL_ACQUIRE_FLAG_DONTWAIT;
++            ret = gst_buffer_pool_acquire_buffer (bpool, &to_queue, &params);
++            if (ret != GST_FLOW_OK){
++              GST_WARNING_OBJECT (pool,"fail(%d) gst_buffer_pool_acquire_buffer",ret);
++              goto acquire_failed;
++            }
++
++            ret = gst_v4l2_buffer_pool_prepare_buffer (pool, to_queue, *buf);
++            if (ret != GST_FLOW_OK) {
++              GST_WARNING_OBJECT (pool,"fail(%d) gst_v4l2_buffer_pool_prepare_buffer",ret);
++              gst_buffer_unref (to_queue);
++              goto prepare_failed;
++            }
++
++            /* retreive the group */
++            gst_v4l2_is_buffer_valid (to_queue, &group);
++          }
++
++          if ((ret = gst_v4l2_buffer_pool_qbuf (pool, to_queue, group, NULL))
++              != GST_FLOW_OK)
++            goto queue_failed;
++
++          /* Remove our ref, we will still hold this buffer in acquire as needed,
++           * otherwise the pool will think it is outstanding and will refuse to stop. */
++          gst_buffer_unref (to_queue);
++
++          /* release as many buffer as possible */
++          while (gst_v4l2_buffer_pool_dqbuf (pool, &buffer, NULL, FALSE) ==
++              GST_FLOW_OK) {
++            if (buffer->pool == NULL)
++              gst_v4l2_buffer_pool_release_buffer (bpool, buffer);
++          }
++
++          if (g_atomic_int_get (&pool->num_queued) >= pool->min_latency) {
++            /* all buffers are queued, try to dequeue one and release it back
++             * into the pool so that _acquire can get to it again. */
++            ret = gst_v4l2_buffer_pool_dqbuf (pool, &buffer, NULL, TRUE);
++            if (ret == GST_FLOW_OK && buffer->pool == NULL)
++              /* release the rendered buffer back into the pool. This wakes up any
++               * thread waiting for a buffer in _acquire(). */
++              gst_v4l2_buffer_pool_release_buffer (bpool, buffer);
++          }
++          break;
++        }
++        default:
++          g_assert_not_reached ();
++          break;
++      }
++      break;
++    default:
++      g_assert_not_reached ();
++      break;
++  }
++done:
++  return ret;
++
++  /* ERRORS */
++copy_failed:
++  {
++    GST_ERROR_OBJECT (pool, "failed to copy buffer");
++    return ret;
++  }
++buffer_truncated:
++  {
++    GST_WARNING_OBJECT (pool,
++        "Dropping truncated buffer, this is likely a driver bug.");
++    gst_buffer_unref (*buf);
++    *buf = NULL;
++    return GST_V4L2_FLOW_CORRUPTED_BUFFER;
++  }
++eos:
++  {
++    GST_DEBUG_OBJECT (pool, "end of stream reached");
++    gst_buffer_unref (*buf);
++    *buf = NULL;
++    return GST_V4L2_FLOW_LAST_BUFFER;
++  }
++acquire_failed:
++  {
++    if (ret == GST_FLOW_FLUSHING)
++      GST_DEBUG_OBJECT (pool, "flushing");
++    else
++      GST_WARNING_OBJECT (pool, "failed to acquire a buffer: %s",
++          gst_flow_get_name (ret));
++    return ret;
++  }
++prepare_failed:
++  {
++    GST_ERROR_OBJECT (pool, "failed to prepare data");
++    return ret;
++  }
++queue_failed:
++  {
++    GST_ERROR_OBJECT (pool, "failed to queue buffer");
++    return ret;
++  }
++start_failed:
++  {
++    GST_ERROR_OBJECT (pool, "failed to start streaming");
++    return GST_FLOW_ERROR;
++  }
++}
++
+ void
+ gst_v4l2_buffer_pool_set_other_pool (GstV4l2BufferPool * pool,
+     GstBufferPool * other_pool)
+diff --git a/sys/v4l2/gstv4l2bufferpool.h b/sys/v4l2/gstv4l2bufferpool.h
+index 60340c2..d91e288 100644
+--- a/sys/v4l2/gstv4l2bufferpool.h
++++ b/sys/v4l2/gstv4l2bufferpool.h
+@@ -124,6 +124,7 @@ gboolean            gst_v4l2_buffer_pool_orphan  (GstV4l2Object * v4l2object);
+ 
+ void                gst_v4l2_buffer_pool_enable_resolution_change (GstV4l2BufferPool *self);
+ 
++GstFlowReturn gst_v4l2_buffer_pool_preroll_process(GstV4l2BufferPool *pool, GstBuffer **buf);
+ G_END_DECLS
+ 
+ #endif /*__GST_V4L2_BUFFER_POOL_H__ */
+diff --git a/sys/v4l2/gstv4l2object.c b/sys/v4l2/gstv4l2object.c
+index ee60540..35d37e5 100644
+--- a/sys/v4l2/gstv4l2object.c
++++ b/sys/v4l2/gstv4l2object.c
+@@ -197,6 +197,27 @@ static const GstV4L2FormatDesc gst_v4l2_formats[] = {
+ 
+ #define GST_V4L2_FORMAT_COUNT (G_N_ELEMENTS (gst_v4l2_formats))
+ 
++#if defined(TCC_V4L2SINK_DRIVER_USE)
++static const GstV4L2FormatDesc gst_v4l2_tc_formats[] = {
++    /* from Linux 2.6.15 videodev2.h */
++    {V4L2_PIX_FMT_YVU420, TRUE},
++    {V4L2_PIX_FMT_YUV422P, TRUE},
++
++    /* two planes -- one Y, one Cr + Cb interleaved  */
++    {V4L2_PIX_FMT_NV12, TRUE},
++    {V4L2_PIX_FMT_YUV420, TRUE},
++
++    {V4L2_PIX_FMT_RGB555, TRUE},
++    {V4L2_PIX_FMT_RGB565, TRUE},
++    {V4L2_PIX_FMT_BGR24, TRUE},
++    {V4L2_PIX_FMT_RGB24, TRUE},
++    {V4L2_PIX_FMT_BGR32, TRUE},
++    {V4L2_PIX_FMT_RGB32, TRUE},
++};
++
++#define GST_V4L2_FORMAT_TC_COUNT (G_N_ELEMENTS (gst_v4l2_tc_formats))
++#endif //#if defined(TCC_V4L2SINK_DRIVER_USE)
++
+ static GSList *gst_v4l2_object_get_format_list (GstV4l2Object * v4l2object);
+ 
+ 
+@@ -514,7 +535,11 @@ gst_v4l2_object_new (GstElement * element,
+   v4l2object->channels = NULL;
+   v4l2object->colors = NULL;
+ 
++#ifdef TCC_V4L2SINK_DRIVER_USE
++  v4l2object->keep_aspect = FALSE;
++#else
+   v4l2object->keep_aspect = TRUE;
++#endif
+ 
+   v4l2object->n_v4l2_planes = 0;
+ 
+@@ -1622,6 +1647,88 @@ done:
+   return template;
+ }
+ 
++#if defined(TCC_V4L2SINK_DRIVER_USE)
++static GstVideoFormat
++gst_v4l2_object_v4l2fourcc_to_video_tc_format (guint32 fourcc)
++{
++    GstVideoFormat format;
++
++    switch (fourcc) {
++        case V4L2_PIX_FMT_NV12:
++            format = GST_VIDEO_FORMAT_NV12_TC;
++            break;
++        case V4L2_PIX_FMT_YUV420:
++        case V4L2_PIX_FMT_YVU420:
++        case V4L2_PIX_FMT_YUV422P:
++            format = GST_VIDEO_FORMAT_I420_TC;
++            break;
++        case V4L2_PIX_FMT_RGB555:
++            format = GST_VIDEO_FORMAT_RGB15;
++            break;
++        case V4L2_PIX_FMT_RGB565:
++            format = GST_VIDEO_FORMAT_RGB16;
++            break;
++        case V4L2_PIX_FMT_RGB24:
++            format = GST_VIDEO_FORMAT_RGB;
++            break;
++        case V4L2_PIX_FMT_BGR24:
++            format = GST_VIDEO_FORMAT_BGR;
++            break;
++        case V4L2_PIX_FMT_RGB32:
++            format = GST_VIDEO_FORMAT_xRGB;
++            break;
++        case V4L2_PIX_FMT_BGR32:
++            format = GST_VIDEO_FORMAT_BGRx;
++            break;
++        default:
++            format = GST_VIDEO_FORMAT_UNKNOWN;
++            break;
++    }
++
++    return format;
++}
++
++GstStructure *gst_v4l2_object_v4l2fourcc_to_structure_for_tc (guint32 fourcc)
++{
++    GstStructure *structure = NULL;
++
++    switch (fourcc)
++    {
++        case V4L2_PIX_FMT_YUV420:  /* I420/IYUV */
++        case V4L2_PIX_FMT_NV12:    /* 12  Y/CbCr 4:2:0  */
++        case V4L2_PIX_FMT_YVU420:
++        case V4L2_PIX_FMT_YUV422P:
++        {
++            GstVideoFormat format;
++            format = gst_v4l2_object_v4l2fourcc_to_video_tc_format (fourcc);
++            if (format != GST_VIDEO_FORMAT_UNKNOWN)
++                structure = gst_structure_new ("video/x-tc-raw",
++                        "format", G_TYPE_STRING, gst_video_format_to_string (format), NULL);
++            break;
++        }
++        case V4L2_PIX_FMT_RGB555:
++        case V4L2_PIX_FMT_RGB565:
++        case V4L2_PIX_FMT_RGB24:
++        case V4L2_PIX_FMT_BGR24:
++        case V4L2_PIX_FMT_RGB32:
++        case V4L2_PIX_FMT_BGR32:
++        {
++            GstVideoFormat format;
++            format = gst_v4l2_object_v4l2fourcc_to_video_tc_format (fourcc);
++            if (format != GST_VIDEO_FORMAT_UNKNOWN)
++                structure = gst_structure_new ("video/x-tc-raw",
++                        "format", G_TYPE_STRING, gst_video_format_to_string (format), NULL);
++            break;
++        }
++        default:
++        GST_DEBUG ("Unknown fourcc 0x%08x %" GST_FOURCC_FORMAT, fourcc, GST_FOURCC_ARGS (fourcc));
++        break;
++    }
++
++    return structure;
++}
++#endif //#if defined(TCC_V4L2SINK_DRIVER_USE)
++
+ /* Add an 'alternate' variant of the caps with the feature */
+ static void
+ add_alternate_variant (GstV4l2Object * v4l2object, GstCaps * caps,
+@@ -1692,6 +1799,23 @@ gst_v4l2_object_get_caps_helper (GstV4L2FormatFlags flags)
+     }
+   }
+ 
++#if defined(TCC_V4L2SINK_DRIVER_USE)
++  for ( i = 0 ; i < GST_V4L2_FORMAT_TC_COUNT; i++)
++  {
++    GstStructure *template;
++    template = gst_v4l2_object_v4l2fourcc_to_structure_for_tc (gst_v4l2_tc_formats[i].format);
++    if(template) {
++      if (gst_v4l2_tc_formats[i].dimensions) {
++        gst_structure_set (template,
++           "width", GST_TYPE_INT_RANGE, 1, GST_V4L2_MAX_SIZE,
++           "height", GST_TYPE_INT_RANGE, 1, GST_V4L2_MAX_SIZE,
++           "framerate", GST_TYPE_FRACTION_RANGE, 0, 1, G_MAXINT, 1, NULL);
++      }
++      gst_caps_append_structure (caps, template);
++    }
++  }
++#endif //#if defined(TCC_V4L2SINK_DRIVER_USE)
++
+   caps = gst_caps_simplify (caps);
+   caps_interlaced = gst_caps_simplify (caps_interlaced);
+ 
+@@ -1763,6 +1887,44 @@ gst_v4l2_object_get_caps_info (GstV4l2Object * v4l2object, GstCaps * caps,
+   if (!gst_video_info_from_caps (info, caps))
+     goto invalid_format;
+ 
++#ifdef TCC_V4L2SINK_DRIVER_USE
++  if (g_str_equal (mimetype, "video/x-tc-raw") || gst_v4l2_object_is_connected_tcvdec(v4l2object)) {
++    switch (GST_VIDEO_INFO_FORMAT (info)) {
++      case GST_VIDEO_FORMAT_I420_TC:
++      case GST_VIDEO_FORMAT_I420:
++        fourcc = V4L2_PIX_FMT_YUV420;
++        break;
++      case GST_VIDEO_FORMAT_NV12_TC:
++      case GST_VIDEO_FORMAT_NV12:
++        fourcc = V4L2_PIX_FMT_NV12;
++        break;
++      case GST_VIDEO_FORMAT_RGB15:
++        fourcc = V4L2_PIX_FMT_RGB555;
++        break;
++      case GST_VIDEO_FORMAT_RGB16:
++        fourcc = V4L2_PIX_FMT_RGB565;
++        break;
++      case GST_VIDEO_FORMAT_RGB:
++        fourcc = V4L2_PIX_FMT_RGB24;
++        break;
++      case GST_VIDEO_FORMAT_BGR:
++        fourcc = V4L2_PIX_FMT_BGR24;
++        break;
++      case GST_VIDEO_FORMAT_xRGB:
++      case GST_VIDEO_FORMAT_ARGB:
++        fourcc = V4L2_PIX_FMT_RGB32;
++        break;
++      case GST_VIDEO_FORMAT_BGRx:
++      case GST_VIDEO_FORMAT_BGRA:
++        fourcc = V4L2_PIX_FMT_BGR32;
++        break;
++      default:
++        printf("%s %d %d\n",__func__,__LINE__, GST_VIDEO_INFO_FORMAT (info));
++        break;
++    }
++  }
++  else
++#endif //#ifdef TCC_V4L2SINK_DRIVER_USE
+   if (g_str_equal (mimetype, "video/x-raw")) {
+     switch (GST_VIDEO_INFO_FORMAT (info)) {
+       case GST_VIDEO_FORMAT_I420:
+@@ -2613,7 +2775,12 @@ return_data:
+   gst_structure_set (s, "width", G_TYPE_INT, (gint) width,
+       "height", G_TYPE_INT, (gint) height, NULL);
+ 
++#ifdef TCC_V4L2SINK_DRIVER_USE
++  gst_structure_set (s, "pixel-aspect-ratio", GST_TYPE_FRACTION_RANGE, 0, 1,
++    G_MAXINT, 1, NULL);
++#else
+   gst_v4l2_object_add_aspect_ratio (v4l2object, s);
++#endif
+ 
+   if (!v4l2object->skip_try_fmt_probes) {
+     gst_v4l2_object_add_interlace_mode (v4l2object, s, width, height,
+@@ -2975,8 +3142,14 @@ default_frame_sizes:
+     if (fix_num) {
+       gst_structure_set (tmp, "framerate", GST_TYPE_FRACTION, fix_num,
+           fix_denom, NULL);
+-    } else if (v4l2object->type == V4L2_BUF_TYPE_VIDEO_CAPTURE ||
+-        v4l2object->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
++    } 
++#ifdef TCC_V4L2SINK_DRIVER_USE
++    else
++#else
++    else if (v4l2object->type == V4L2_BUF_TYPE_VIDEO_CAPTURE ||
++      v4l2object->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
++#endif
++    {
+       /* if norm can't be used, copy the template framerate */
+       gst_structure_set (tmp, "framerate", GST_TYPE_FRACTION_RANGE, 0, 1,
+           G_MAXINT, 1, NULL);
+@@ -2992,8 +3165,12 @@ default_frame_sizes:
+     else
+       gst_structure_set (tmp, "height", GST_TYPE_INT_RANGE, min_h, max_h, NULL);
+ 
++#ifdef TCC_V4L2SINK_DRIVER_USE
++    gst_structure_set (tmp, "pixel-aspect-ratio", GST_TYPE_FRACTION_RANGE, 0, 1,
++      G_MAXINT, 1, NULL);
++#else
+     gst_v4l2_object_add_aspect_ratio (v4l2object, tmp);
+-
++#endif
+     /* We could consider setting interlace mode from min and max. */
+     gst_v4l2_object_add_interlace_mode (v4l2object, tmp, max_w, max_h,
+         pixelformat);
+@@ -3011,8 +3188,10 @@ default_frame_sizes:
+       }
+       /* We could consider to check colorspace for min too, in case it depends on
+        * the size. But in this case, min and max could not be enough */
++#ifndef TCC_V4L2SINK_DRIVER_USE
+       gst_v4l2_object_add_colorspace (v4l2object, tmp, probed_w, probed_h,
+           pixelformat);
++#endif
+     }
+ 
+     gst_v4l2_object_update_and_append (v4l2object, pixelformat, ret, tmp);
+@@ -3124,7 +3303,22 @@ gst_v4l2_object_setup_pool (GstV4l2Object * v4l2object, GstCaps * caps)
+           gst_v4l2_object_is_dmabuf_supported (v4l2object)) {
+         mode = GST_V4L2_IO_DMABUF;
+       } else {
++#ifdef TCC_V4L2SINK_DRIVER_USE
++        GstStructure *s;
++        const gchar *mimetype;
++
++        s = gst_caps_get_structure(caps, 0);
++        mimetype = gst_structure_get_name(s);
++
++        if(g_str_equal(mimetype, "video/x-tc-raw") || gst_v4l2_object_is_connected_tcvdec(v4l2object))
++          mode = GST_V4L2_IO_USERPTR;
++        else
++          mode = GST_V4L2_IO_MMAP;
++
++        printf("%s %d mimetype = %s, mode = %d ( USERPTR=3/MMAP=2)\n",__func__,__LINE__, mimetype, mode);
++#else
+         mode = GST_V4L2_IO_MMAP;
++#endif
+       }
+     }
+   } else if (v4l2object->req_mode == GST_V4L2_IO_MMAP ||
+@@ -3554,6 +3748,24 @@ gst_v4l2_object_set_format_full (GstV4l2Object * v4l2object, GstCaps * caps,
+   if (!n_v4l_planes || !v4l2object->prefered_non_contiguous)
+     n_v4l_planes = 1;
+ 
++#ifdef TCC_V4L2SINK_DRIVER_USE
++  if(pixelformat == V4L2_PIX_FMT_YUV420) {
++    if(width % 4 != 0 || height % 4 != 0) {
++      width   = GST_ROUND_UP_4(width);
++      height  = GST_ROUND_UP_4(height);
++
++      GST_VIDEO_INFO_WIDTH(&info)     = width;
++      GST_VIDEO_INFO_HEIGHT(&info)    = height;
++    }
++  }
++  else if(pixelformat == V4L2_PIX_FMT_RGB24) {
++    if(width % 2 != 0) {
++      width 	= GST_ROUND_UP_2(width);
++      GST_VIDEO_INFO_WIDTH(&info) 	= width;
++    }
++  }
++#endif
++
+   field = get_v4l2_field_for_info (&info);
+   if (field != V4L2_FIELD_NONE)
+     GST_DEBUG_OBJECT (v4l2object->element, "interlaced video");
+@@ -4623,6 +4835,26 @@ gst_v4l2_object_probe_caps (GstV4l2Object * v4l2object, GstCaps * filter)
+     gst_structure_free (template);
+   }
+ 
++#if defined(TCC_V4L2SINK_DRIVER_USE)
++  {
++    int i = 0;
++    for ( i = 0 ; i < GST_V4L2_FORMAT_TC_COUNT; i++) {
++      GstStructure *template;
++      template = gst_v4l2_object_v4l2fourcc_to_structure_for_tc (gst_v4l2_tc_formats[i].format);
++      if(template) {
++        GstCaps *tmp;
++        tmp = gst_v4l2_object_probe_caps_for_format(v4l2object,
++              gst_v4l2_tc_formats[i].format, template);
++
++        if (tmp)
++          gst_caps_append (ret, tmp);
++
++        gst_structure_free (template);
++     }
++    }
++  }
++#endif //#if defined(TCC_V4L2SINK_DRIVER_USE)
++
+   if (filter) {
+     GstCaps *tmp;
+ 
+@@ -4636,6 +4868,28 @@ gst_v4l2_object_probe_caps (GstV4l2Object * v4l2object, GstCaps * filter)
+   return ret;
+ }
+ 
++gboolean gst_v4l2_object_is_connected_tcvdec(GstV4l2Object * v4l2object)
++{
++  gboolean ret = FALSE;
++#ifdef TCC_V4L2SINK_DRIVER_USE
++  if(v4l2object)
++  {
++    ret = v4l2object->isConnectedTcDec;
++  }
++#endif
++  return ret;
++}
++
++void gst_v4l2_object_set_connected_tcvdec(GstV4l2Object * v4l2object,gboolean flag)
++{
++#ifdef TCC_V4L2SINK_DRIVER_USE
++  if(v4l2object)
++  {
++    v4l2object->isConnectedTcDec = flag;
++  }
++#endif
++}
++
+ GstCaps *
+ gst_v4l2_object_get_caps (GstV4l2Object * v4l2object, GstCaps * filter)
+ {
+@@ -4650,6 +4904,22 @@ gst_v4l2_object_get_caps (GstV4l2Object * v4l2object, GstCaps * filter)
+   } else {
+     ret = gst_caps_ref (v4l2object->probed_caps);
+   }
++  #ifdef TCC_V4L2SINK_DRIVER_USE
++  if((ret) && (gst_caps_get_size(ret) > 0))
++  {
++    GstStructure *structure;
++    structure = gst_caps_get_structure (ret, 0);
++    if(structure)
++    {
++      gboolean tc_vdec = FALSE;
++      if(gst_structure_get_boolean(structure, "tc-vdec",&tc_vdec) && tc_vdec)
++      {
++        v4l2object->isConnectedTcDec = TRUE;
++        GST_INFO_OBJECT (v4l2object->element,"\x1b[47m \x1b[31m connected tcvdec \x1b[0m");
++      }
++    }
++  }
++  #endif
+ 
+   return ret;
+ }
+@@ -5192,7 +5462,9 @@ gst_v4l2_object_propose_allocation (GstV4l2Object * obj, GstQuery * query)
+   size = obj->info.size;
+   min = GST_V4L2_MIN_BUFFERS (obj);
+   max = VIDEO_MAX_FRAME;
+-
++#ifdef TCC_V4L2SINK_DRIVER_USE
++  max = GST_V4L2_MAX_BUFFERS;
++#endif
+   gst_query_parse_allocation (query, &caps, &need_pool);
+ 
+   if (caps == NULL)
+diff --git a/sys/v4l2/gstv4l2object.h b/sys/v4l2/gstv4l2object.h
+index 33d224b..ae93ddc 100644
+--- a/sys/v4l2/gstv4l2object.h
++++ b/sys/v4l2/gstv4l2object.h
+@@ -42,15 +42,47 @@ typedef struct _GstV4l2ObjectClassHelper GstV4l2ObjectClassHelper;
+ 
+ #include <gstv4l2bufferpool.h>
+ 
++#include <stdio.h>
++#include <mach/tcc_video_private.h>
++#include "tcc_video_common.h"
++#ifdef TCC_V4L2SINK_DRIVER_USE
++#undef VIDIOC_CREATE_BUFS
++#undef HAVE_DECL_V4L2_MEMORY_DMABUF
++#define GST_VIDEO_TCC_MAX_PLANES  2
++
++#define fourcc2char(fourcc) \
++        ((char) ((fourcc)     &0xff)), \
++        ((char) (((fourcc)>>8 )&0xff)), \
++        ((char) (((fourcc)>>16)&0xff)), \
++        ((char) (((fourcc)>>24)&0xff))
++
++#define GST_V4L2_BUFFER_FLAG_INTERLACE_TB 		0x00000001
++#define GST_V4L2_BUFFER_FLAG_INTERLACE_BT 		0x00000002
++#define GST_V4L2_BUFFER_FLAG_RESOLUTION_CHANGE 	0x00000004
++#define GST_V4L2_BUFFER_FLAG_MAP_CONVERTER 		0x00000008
++
++#define GST_V4L2_BUFFER_FLAG_DTRC               0x00000080
++#define GST_V4L2_BUFFER_FLAG_YUV_10BIT_MODE1    0x10000000 // 16bit format type
++#define GST_V4L2_BUFFER_FLAG_YUV_10BIT_MODE2    0x20000000 // 10bit format type
++#define OMX_VIDEO_OUT_FLAG_YUV_10BIT_MODE1      0x00000100 // 16bit format type
++#define OMX_VIDEO_OUT_FLAG_YUV_10BIT_MODE2      0x00000200 // 10bit format type
++
++#endif
+ /* size of v4l2 buffer pool in streaming case, obj->info needs to be valid */
+ #define GST_V4L2_MIN_BUFFERS(obj) \
+     ((GST_VIDEO_INFO_INTERLACE_MODE (&obj->info) == \
+       GST_VIDEO_INTERLACE_MODE_ALTERNATE) ? \
+       /* 2x buffers needed with each field in its own buffer */ \
+       4 : 2)
+-
++#ifdef TCC_V4L2SINK_DRIVER_USE
++#define GST_V4L2_MAX_BUFFERS 12
++/* max frame width/height */
++#define GST_V4L2_MAX_SIZE 5000 /* 2^15 == 32768 */
++#else
++#define GST_V4L2_MAX_BUFFERS 16
+ /* max frame width/height */
+ #define GST_V4L2_MAX_SIZE (1<<15) /* 2^15 == 32768 */
++#endif
+ 
+ G_BEGIN_DECLS
+ 
+@@ -136,6 +168,7 @@ struct _GstV4l2Object {
+   GstV4l2IOMode mode;
+ 
+   gboolean active;
++  gboolean streaming;
+ 
+   /* the current format */
+   struct v4l2_fmtdesc *fmtdesc;
+@@ -180,6 +213,15 @@ struct _GstV4l2Object {
+   /* opened device specific capabilities */
+   guint32 device_caps;
+ 
++#ifdef TCC_V4L2SINK_DRIVER_USE
++  /* to set format */
++  gboolean change_overlay_size;
++  int vout_mode;
++  gboolean isConnectedTcDec;
++
++  /* for crop source img */
++  struct v4l2_crop crop;
++#endif
+   /* lists... */
+   GSList *formats;              /* list of available capture formats */
+   GstCaps *probed_caps;
+@@ -248,6 +290,9 @@ GType gst_v4l2_object_get_type (void);
+     PROP_PIXEL_ASPECT_RATIO,  \
+     PROP_FORCE_ASPECT_RATIO
+ 
++gboolean gst_v4l2_object_is_connected_tcvdec(GstV4l2Object * v4l2object);
++void gst_v4l2_object_set_connected_tcvdec(GstV4l2Object * v4l2object,gboolean flag);
++
+ /* create/destroy */
+ GstV4l2Object*  gst_v4l2_object_new       (GstElement * element,
+                                            GstObject * dbg_obj,
+diff --git a/sys/v4l2/gstv4l2sink.c b/sys/v4l2/gstv4l2sink.c
+index 7ad1a8c..1b4c372 100644
+--- a/sys/v4l2/gstv4l2sink.c
++++ b/sys/v4l2/gstv4l2sink.c
+@@ -78,12 +78,40 @@ enum
+   PROP_OVERLAY_LEFT,
+   PROP_OVERLAY_WIDTH,
+   PROP_OVERLAY_HEIGHT,
++#if defined(TCC_V4L2SINK_DRIVER_USE)
++  PROP_OVERLAY_SET_TOP,
++  PROP_OVERLAY_SET_LEFT,
++  PROP_OVERLAY_SET_WIDTH,
++  PROP_OVERLAY_SET_HEIGHT,
++  PROP_OVERLAY_SET_UPDATE,
++#endif
+   PROP_CROP_TOP,
+   PROP_CROP_LEFT,
+   PROP_CROP_WIDTH,
+   PROP_CROP_HEIGHT,
++#if defined(TCC_V4L2SINK_DRIVER_USE)
++  PROP_CROP_SET_TOP,
++  PROP_CROP_SET_LEFT,
++  PROP_CROP_SET_WIDTH,
++  PROP_CROP_SET_HEIGHT,
++  PROP_CROP_SET_UPDATE,
++  PROP_SET_DELAY,
++  PROP_ASPECT_RATIO,
++#endif
+ };
+ 
++#if defined(TCC_V4L2SINK_DRIVER_USE)
++enum
++{
++    ASPECT_MODE_INIT = 0,
++    ASPECT_MODE_STANDARD,
++    ASPECT_MODE_FULL,
++    ASPECT_MODE_ORIGINAL,
++    ASPECT_MODE_16_9,
++    ASPECT_MODE_4_3,
++    ASPECT_MODE_END
++};
++#endif
+ 
+ GST_IMPLEMENT_V4L2_COLOR_BALANCE_METHODS (GstV4l2Sink, gst_v4l2sink);
+ GST_IMPLEMENT_V4L2_TUNER_METHODS (GstV4l2Sink, gst_v4l2sink);
+@@ -121,6 +149,7 @@ static GstFlowReturn gst_v4l2sink_show_frame (GstVideoSink * bsink,
+ static gboolean gst_v4l2sink_unlock (GstBaseSink * sink);
+ static gboolean gst_v4l2sink_unlock_stop (GstBaseSink * sink);
+ 
++static GstFlowReturn  gst_v4l2sink_preroll_show_frame(GstBaseSink *bsink, GstBuffer *buf);
+ static void
+ gst_v4l2sink_class_init (GstV4l2SinkClass * klass)
+ {
+@@ -160,6 +189,38 @@ gst_v4l2sink_class_init (GstV4l2SinkClass * klass)
+           "The height of the video overlay; default is equal to negotiated image height",
+           0, G_MAXUINT, 0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+ 
++#if defined(TCC_V4L2SINK_DRIVER_USE)
++  g_object_class_install_property(
++          gobject_class,
++          PROP_OVERLAY_SET_TOP,
++          g_param_spec_int("overlay-set-top", "Overlay Setting top", "The topmost (y) coordinate of the video overlay; top left corner of screen is 0,0",
++              G_MININT, G_MAXINT, 0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
++
++  g_object_class_install_property(
++          gobject_class,
++          PROP_OVERLAY_SET_LEFT,
++          g_param_spec_int("overlay-set-left", "Overlay Setting left", "The leftmost (x) coordinate of the video overlay; top left corner of screen is 0,0",
++              G_MININT, G_MAXINT, 0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
++
++  g_object_class_install_property(
++          gobject_class,
++          PROP_OVERLAY_SET_WIDTH,
++          g_param_spec_uint("overlay-set-width", "Overlay Setting width", "The width of the video overlay; default is equal to negotiated image width",
++              0, G_MAXUINT, 0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
++
++  g_object_class_install_property(
++          gobject_class,
++          PROP_OVERLAY_SET_HEIGHT,
++          g_param_spec_uint("overlay-set-height", "Overlay Setting height", "The height of the video overlay; default is equal to negotiated image height",
++              0, G_MAXUINT, 0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
++
++  g_object_class_install_property(
++          gobject_class,
++          PROP_OVERLAY_SET_UPDATE,
++          g_param_spec_uint("overlay-set-update", "Overlay Setting values Update", "The update of video overlay values; default is equal to 1",
++              0, G_MAXUINT, 0, G_PARAM_WRITABLE));
++#endif
++
+   g_object_class_install_property (gobject_class, PROP_CROP_TOP,
+       g_param_spec_int ("crop-top", "Crop top",
+           "The topmost (y) coordinate of the video crop; top left corner of image is 0,0",
+@@ -177,6 +238,50 @@ gst_v4l2sink_class_init (GstV4l2SinkClass * klass)
+           "The height of the video crop; default is equal to negotiated image height",
+           0, 0xffffffff, 0, G_PARAM_READWRITE));
+ 
++#if defined(TCC_V4L2SINK_DRIVER_USE)
++  g_object_class_install_property(
++          gobject_class,
++          PROP_CROP_SET_TOP,
++          g_param_spec_int("crop-set-top", "Crop Setting top", "The topmost (y) coordinate of the video crop; top left corner of image is 0,0",
++              0x80000000, 0x7fffffff, 0, G_PARAM_WRITABLE));
++
++  g_object_class_install_property(
++          gobject_class,
++          PROP_CROP_SET_LEFT,
++          g_param_spec_int("crop-set-left", "Crop Setting left", "The leftmost (x) coordinate of the video crop; top left corner of image is 0,0",
++              0x80000000, 0x7fffffff, 0, G_PARAM_WRITABLE));
++
++  g_object_class_install_property(
++          gobject_class,
++          PROP_CROP_SET_WIDTH,
++          g_param_spec_uint("crop-set-width", "Crop Setting width", "The width of the video crop; default is equal to negotiated image width",
++              0, 0xffffffff, 0, G_PARAM_WRITABLE));
++
++  g_object_class_install_property(
++          gobject_class,
++          PROP_CROP_SET_HEIGHT,
++          g_param_spec_uint("crop-set-height", "Crop Setting height", "The height of the video crop; default is equal to negotiated image height",
++              0, 0xffffffff, 0, G_PARAM_WRITABLE));
++
++  g_object_class_install_property(
++          gobject_class,
++          PROP_CROP_SET_UPDATE,
++          g_param_spec_uint("crop-set-update", "Crop Setting values Update", "The update of the video crop values; default is equal to 1",
++              0, 0xffffffff, 0, G_PARAM_WRITABLE));
++
++  g_object_class_install_property(
++          gobject_class,
++          PROP_SET_DELAY,
++          g_param_spec_uint("delay", "show frame delay", "keep the time during input delay time after showing every frame",
++              0, 0xffffffff, 0, G_PARAM_WRITABLE));
++
++  g_object_class_install_property(
++          gobject_class,
++          PROP_ASPECT_RATIO,
++          g_param_spec_uint("aspectratio", "set aspect ratio", "set aspect ratio type values : default is equal to 0",
++              ASPECT_MODE_INIT, ASPECT_MODE_END, 0, G_PARAM_WRITABLE));
++#endif
++
+   gst_element_class_set_static_metadata (element_class,
+       "Video (video4linux2) Sink", "Sink/Video",
+       "Displays frames on a video4linux2 device", "Rob Clark <rob@ti.com>,");
+@@ -192,6 +297,8 @@ gst_v4l2sink_class_init (GstV4l2SinkClass * klass)
+   basesink_class->unlock = GST_DEBUG_FUNCPTR (gst_v4l2sink_unlock);
+   basesink_class->unlock_stop = GST_DEBUG_FUNCPTR (gst_v4l2sink_unlock_stop);
+ 
++  basesink_class->preroll = GST_DEBUG_FUNCPTR(gst_v4l2sink_preroll_show_frame);
++
+   videosink_class->show_frame = GST_DEBUG_FUNCPTR (gst_v4l2sink_show_frame);
+ 
+   klass->v4l2_class_devices = NULL;
+@@ -212,16 +319,35 @@ gst_v4l2sink_init (GstV4l2Sink * v4l2sink)
+    * (which can be overridden by the one creating the v4l2sink
+    * after the constructor returns)
+    */
+-  g_object_set (v4l2sink, "device", "/dev/video1", NULL);
++#ifdef TCC_V4L2SINK_DRIVER_USE
++  g_object_set(v4l2sink, "device", "/dev/video10", NULL);
++#else
++  g_object_set(v4l2sink, "device", "/dev/video1", NULL);
++#endif
+ 
+   v4l2sink->overlay_fields_set = 0;
+   v4l2sink->crop_fields_set = 0;
++#ifdef TCC_V4L2SINK_DRIVER_USE
++  v4l2sink->useroverlay.left      = 0;
++  v4l2sink->useroverlay.top       = 0;
++  v4l2sink->useroverlay.width     = 0;
++  v4l2sink->useroverlay.height    = 0;
++  v4l2sink->delay                 = 0;
++  v4l2sink->aspectratio           = 0;
++  v4l2sink->oldaspectratio        = 0;
++  v4l2sink->lastbuffer            = NULL;
++#endif
+ }
+ 
+ 
+ static void
+ gst_v4l2sink_finalize (GstV4l2Sink * v4l2sink)
+ {
++  if(v4l2sink->lastbuffer)
++  {
++    gst_buffer_unref(v4l2sink->lastbuffer);
++    v4l2sink->lastbuffer = NULL;
++  }
+   gst_v4l2_object_destroy (v4l2sink->v4l2object);
+ 
+   G_OBJECT_CLASS (parent_class)->finalize ((GObject *) (v4l2sink));
+@@ -240,6 +366,239 @@ enum
+   RECT_HEIGHT_SET = 0x08
+ };
+ 
++#ifdef TCC_V4L2SINK_DRIVER_USE
++static int tcc_read_sysfs(char* fullpath)
++{
++  int ret = -1;
++  FILE* fp;
++  fp = fopen(fullpath, "r");
++  if(fp)
++  {
++    fscanf(fp, "%d", &ret);
++    fclose(fp);
++  }
++
++  return ret;
++}
++
++static int tcc_get_display_info(int* isExtendDisplay, int* width, int* height)
++{
++  FILE* fp;
++  int read_display;
++  int read_width, read_height;
++
++  if(!isExtendDisplay || !width || !height)
++  {
++    //g_print("[%d][%s] parameters error\n", __LINE__, __func__);
++    return -1;
++  }
++
++  read_display = tcc_read_sysfs("/sys/class/tcc_dispman/tcc_dispman/tcc_output_mode_detected");
++  if(read_display == 1)
++  {
++    read_width = tcc_read_sysfs("/sys/class/tcc_dispman/tcc_dispman/tcc_output_dispdev_width");
++    read_height = tcc_read_sysfs("/sys/class/tcc_dispman/tcc_dispman/tcc_output_dispdev_height");
++    g_print("[%d][%s] ExtendDisplay Resolution %dx%d\n", __LINE__, __func__, read_width, read_height);
++  }
++  else if(read_display == 0)
++  {
++    read_width = tcc_read_sysfs("/sys/class/tcc_dispman/tcc_dispman/tcc_output_panel_width");
++    read_height = tcc_read_sysfs("/sys/class/tcc_dispman/tcc_dispman/tcc_output_panel_height");
++    g_print("[%d][%s] LCD Resolution %dx%d\n", __LINE__, __func__, read_width, read_height);
++  }
++  else
++  {
++    //g_print("[%d][%s] sysfs read error\n", __LINE__, __func__);
++    return -1;
++  }
++
++  *isExtendDisplay = read_display;
++  *width = read_width;
++  *height = read_height;
++  return 0;
++}
++
++/******************************************************************************
++*	FUNCTIONS			: TCC_Aspect_Ratio_Calculate_Image
++******************************************************************************/
++void TCC_Aspect_Ratio_Calculate_Image (int OriginImg_Width, int OriginImg_Height, int OutBuff_Width, int OutBuff_Height,
++        int *Out_Width, int *Out_Height, int *Out_Offset_Horizontal, int *Out_Offset_Vertical,
++        unsigned int ScreenMode)
++{
++  int DecodedImg_Offset_Horizontal = -1, DecodedImg_Offset_Vertical= -1;
++  int DecodedImg_Width = -1, DecodedImg_Height = -1;
++
++  float src_aspect_ratio;
++  float dst_aspect_ratio;
++
++  /*Source*/
++  src_aspect_ratio = (float)OriginImg_Width/(float)OriginImg_Height;
++  /*Destination*/
++  dst_aspect_ratio = (float)OutBuff_Width/(float)OutBuff_Height;
++
++  //printf("[%s][%d]  (%lf -> %lf)\n", __func__, __LINE__, src_aspect_ratio, dst_aspect_ratio);
++
++  if (ScreenMode == ASPECT_MODE_STANDARD)
++  {
++    if(src_aspect_ratio>dst_aspect_ratio)
++    {
++      DecodedImg_Width = OutBuff_Width;
++      DecodedImg_Height = DecodedImg_Width / src_aspect_ratio;
++    }
++    else
++    {
++      DecodedImg_Height = OutBuff_Height;
++      DecodedImg_Width = DecodedImg_Height * src_aspect_ratio;
++    }
++  }
++  else if(ScreenMode == ASPECT_MODE_ORIGINAL)
++  {
++    if((OriginImg_Width < OutBuff_Width) && (OriginImg_Height < OutBuff_Height))
++    {
++      DecodedImg_Width = OriginImg_Width;
++      DecodedImg_Height = OriginImg_Height;
++    }
++    else
++    {
++      DecodedImg_Height = OutBuff_Height;
++      DecodedImg_Width = OutBuff_Width;
++    }
++  }
++  else if(ScreenMode == ASPECT_MODE_16_9)
++  {
++    DecodedImg_Width = OutBuff_Width;
++    DecodedImg_Height = (DecodedImg_Width*9)>>4;
++  }
++  else if(ScreenMode == ASPECT_MODE_4_3)
++  {
++    if(dst_aspect_ratio > (4.0f/3.0f))
++    {
++      DecodedImg_Height = OutBuff_Height;
++      DecodedImg_Width = (DecodedImg_Height<<2)/3;
++    }
++    else
++    {
++      DecodedImg_Width = OutBuff_Width;
++      DecodedImg_Height = (DecodedImg_Width*3)>>2;
++    }
++  }
++  else if(ScreenMode == ASPECT_MODE_FULL)
++  {
++    DecodedImg_Height = OutBuff_Height;
++    DecodedImg_Width = OutBuff_Width;
++  }
++
++  DecodedImg_Height = ((int)DecodedImg_Height >> 4 )<< 4; // 16 pixel unit
++  DecodedImg_Width = ((int)DecodedImg_Width >> 4 )<< 4; // 16 pixel unit
++
++  DecodedImg_Offset_Horizontal = (OutBuff_Width - DecodedImg_Width)>>1;
++  DecodedImg_Offset_Vertical = (OutBuff_Height - DecodedImg_Height)>>1;
++
++  *Out_Width = (int)DecodedImg_Width;
++  *Out_Height = (int)DecodedImg_Height;
++  *Out_Offset_Horizontal = DecodedImg_Offset_Horizontal;
++  *Out_Offset_Vertical = DecodedImg_Offset_Vertical;
++}
++
++void gst_v4l2sink_set_aspectratio(GstV4l2Sink *v4l2sink)
++{
++  unsigned int isextended = 0, tcc_output_width = 0, tcc_output_height = 0;
++  unsigned int out_w, out_h, out_w_offset, out_h_offset =0;
++  unsigned int input_width = 0, input_height = 0;
++  int aspectratio ;
++
++  aspectratio = v4l2sink->aspectratio;
++
++  //calculate
++  input_width =  GST_V4L2_WIDTH (v4l2sink->v4l2object);
++  input_height =  GST_V4L2_HEIGHT (v4l2sink->v4l2object);
++
++  tcc_get_display_info(&isextended, &tcc_output_width, &tcc_output_height);
++  //16byte - aligned.
++  if ( v4l2sink->useroverlay.width > 0 && v4l2sink->useroverlay.height > 0 )
++  {
++    tcc_output_width = v4l2sink->useroverlay.width;
++    tcc_output_height = v4l2sink->useroverlay.height;
++  }
++  else //if( v4l2sink->useroverlay.width == 0 && v4l2sink->useroverlay.height == 0)
++  {
++    if ( tcc_output_width == 0 && tcc_output_height == 0 )
++      return;
++    v4l2sink->useroverlay.width = tcc_output_width;
++    v4l2sink->useroverlay.height = tcc_output_height;
++    v4l2sink->useroverlay.top  = 0;
++    v4l2sink->useroverlay.left = 0;
++  }
++
++  if( aspectratio > ASPECT_MODE_INIT && aspectratio < ASPECT_MODE_END)
++  {
++#if 0
++    if( isextended == 0 ) // LCD
++    {
++      if (input_width < (tcc_output_width >> 2) || input_height< (tcc_output_height >> 3))
++      {
++        // because of the scaler limit
++        tcc_output_width = input_width * 2;
++        tcc_output_height = input_height * 3;
++      }
++      else
++      {
++        tcc_output_width = (tcc_output_width & 0xfffffff0);
++        tcc_output_height = (tcc_output_height & 0xfffffff0);
++      }
++    }
++    else if ( isextended == 1 ) // extended , HDMI
++    {
++      if (input_width < (tcc_output_width >> 2) || input_height < (tcc_output_height >> 3))
++      {
++        // because of the scaler limit
++        tcc_output_width = (input_width * 2 & 0xfffffff0);
++        tcc_output_height = (input_height * 2 & 0xfffffff0);
++      }
++      else
++      {
++        tcc_output_width = (tcc_output_width & 0xfffffff0);
++        tcc_output_height = (tcc_output_height & 0xfffffff0);
++      }
++    }
++#else
++    tcc_output_width = v4l2sink->useroverlay.width & 0xfffffff0;
++    tcc_output_height = v4l2sink->useroverlay.height & 0xfffffff0;
++#endif
++    printf("[%s] overlay info 16byte aligned(%d x %d)\n", __func__, tcc_output_width, tcc_output_height);
++    printf("[%s] Video image(%d x %d)\n", __func__, input_width, input_height);
++
++    TCC_Aspect_Ratio_Calculate_Image(input_width, input_height, tcc_output_width, tcc_output_height,
++               &out_w, &out_h, &out_w_offset, &out_h_offset, aspectratio);
++
++    printf("[%s][%d] Aspect ratio property[%d] Output image(%d X %d) Output ratio=%lf\n", __func__, __LINE__, aspectratio, out_w, out_h, (float)out_w/(float)out_h);
++
++    if ( (out_w >= 0)  && (out_h >= 0) &&  (out_w_offset >= 0) && (out_h_offset >= 0))
++    {
++      v4l2sink->overlay.left = out_w_offset + v4l2sink->useroverlay.left;
++      v4l2sink->overlay.top = out_h_offset+ v4l2sink->useroverlay.top;
++      v4l2sink->overlay.width = out_w;
++      v4l2sink->overlay.height = out_h;
++      v4l2sink->overlay_fields_set = 0xffff;
++    }
++    else
++    {
++      v4l2sink->overlay_fields_set = 0;
++      return;
++    }
++    v4l2sink->oldaspectratio = v4l2sink->aspectratio;
++  }
++  else
++  {
++    v4l2sink->overlay.left = v4l2sink->useroverlay.left;
++    v4l2sink->overlay.top = v4l2sink->useroverlay.top;
++    v4l2sink->overlay.width = v4l2sink->useroverlay.width;
++    v4l2sink->overlay.height = v4l2sink->useroverlay.height;
++    v4l2sink->overlay_fields_set = 0xffff;
++  }
++}
++#endif
++
+ static void
+ gst_v4l2sink_sync_overlay_fields (GstV4l2Sink * v4l2sink)
+ {
+@@ -257,6 +616,9 @@ gst_v4l2sink_sync_overlay_fields (GstV4l2Sink * v4l2sink)
+     else
+       format.type = V4L2_BUF_TYPE_VIDEO_OVERLAY;
+ 
++#ifdef TCC_V4L2SINK_DRIVER_USE
++    format.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_OVERLAY;
++#endif
+     if (obj->ioctl (obj->video_fd, VIDIOC_G_FMT, &format) < 0) {
+       GST_WARNING_OBJECT (v4l2sink, "VIDIOC_G_FMT failed");
+       return;
+@@ -321,6 +683,14 @@ gst_v4l2sink_sync_crop_fields (GstV4l2Sink * v4l2sink)
+     if (v4l2sink->crop_fields_set & RECT_HEIGHT_SET)
+       crop.c.height = v4l2sink->crop.height;
+ 
++#ifdef TCC_V4L2SINK_DRIVER_USE
++    obj->crop.c.top = v4l2sink->crop.top;
++    obj->crop.c.left = v4l2sink->crop.left;
++    /* Please set the width or height value to a nonzero value.
++    If the width or height is zero, the v4l2 driver can not change the crop setting. */
++    obj->crop.c.width = v4l2sink->crop.width;
++    obj->crop.c.height = v4l2sink->crop.height;
++#endif
+     if (obj->ioctl (obj->video_fd, VIDIOC_S_CROP, &crop) < 0) {
+       GST_WARNING_OBJECT (v4l2sink, "VIDIOC_S_CROP failed");
+       return;
+@@ -366,6 +736,55 @@ gst_v4l2sink_set_property (GObject * object,
+         v4l2sink->overlay_fields_set |= RECT_HEIGHT_SET;
+         gst_v4l2sink_sync_overlay_fields (v4l2sink);
+         break;
++#if defined(TCC_V4L2SINK_DRIVER_USE)
++      case PROP_OVERLAY_SET_TOP:
++        v4l2sink->overlay.top = g_value_get_int(value);
++        if(v4l2sink->overlay.top >= 0)
++        {
++          v4l2sink->useroverlay.top = v4l2sink->overlay.top;
++          v4l2sink->overlay_fields_set |= RECT_TOP_SET;
++        }
++        break;
++      case PROP_OVERLAY_SET_LEFT:
++        v4l2sink->overlay.left = g_value_get_int(value);
++        if(v4l2sink->overlay.left >= 0)
++        {
++          v4l2sink->useroverlay.left = v4l2sink->overlay.left;
++          v4l2sink->overlay_fields_set |= RECT_LEFT_SET;
++        }
++        break;
++      case PROP_OVERLAY_SET_WIDTH:
++        v4l2sink->overlay.width = g_value_get_uint(value);
++        if(v4l2sink->overlay.width >= 0)
++        {
++          v4l2sink->useroverlay.width = v4l2sink->overlay.width;
++          v4l2sink->overlay_fields_set |= RECT_WIDTH_SET;
++        }
++        break;
++      case PROP_OVERLAY_SET_HEIGHT:
++        v4l2sink->overlay.height = g_value_get_uint(value);
++        if(v4l2sink->overlay.height >= 0)
++        {
++          v4l2sink->useroverlay.height = v4l2sink->overlay.height;
++          v4l2sink->overlay_fields_set |= RECT_HEIGHT_SET;
++        }
++        break;
++      case PROP_OVERLAY_SET_UPDATE:
++        if(g_value_get_uint(value))
++        {
++          GstBaseSink *basesink;
++          basesink = GST_BASE_SINK (v4l2sink);
++          GST_BASE_SINK_PREROLL_LOCK(basesink);
++          gst_v4l2sink_set_aspectratio((v4l2sink));
++          gst_v4l2sink_sync_overlay_fields(v4l2sink);
++          if(v4l2sink->lastbuffer != NULL && GST_STATE(v4l2sink) >= GST_STATE_PAUSED)
++          {
++            gst_v4l2sink_show_lastframe(v4l2sink, v4l2sink->lastbuffer);
++          }
++          GST_BASE_SINK_PREROLL_UNLOCK(basesink);
++        }
++        break;
++#endif
+       case PROP_CROP_TOP:
+         v4l2sink->crop.top = g_value_get_int (value);
+         v4l2sink->crop_fields_set |= RECT_TOP_SET;
+@@ -386,6 +805,59 @@ gst_v4l2sink_set_property (GObject * object,
+         v4l2sink->crop_fields_set |= RECT_HEIGHT_SET;
+         gst_v4l2sink_sync_crop_fields (v4l2sink);
+         break;
++#if defined(TCC_V4L2SINK_DRIVER_USE)
++      case PROP_CROP_SET_TOP:
++        v4l2sink->crop.top = g_value_get_int(value);
++        v4l2sink->crop_fields_set |= RECT_TOP_SET;
++        break;
++      case PROP_CROP_SET_LEFT:
++        v4l2sink->crop.left = g_value_get_int(value);
++        v4l2sink->crop_fields_set |= RECT_LEFT_SET;
++        break;
++      case PROP_CROP_SET_WIDTH:
++        v4l2sink->crop.width = g_value_get_uint(value);
++        v4l2sink->crop_fields_set |= RECT_WIDTH_SET;
++        break;
++      case PROP_CROP_SET_HEIGHT:
++        v4l2sink->crop.height = g_value_get_uint(value);
++        v4l2sink->crop_fields_set |= RECT_HEIGHT_SET;
++        break;
++      case PROP_CROP_SET_UPDATE:
++        if(g_value_get_uint(value))
++          gst_v4l2sink_sync_crop_fields(v4l2sink);
++        break;
++      case PROP_SET_DELAY:
++        v4l2sink->delay = g_value_get_uint(value);
++        GST_DEBUG_OBJECT(v4l2sink, "delay after show frame = %dus", v4l2sink->delay);
++        break;
++      case PROP_ASPECT_RATIO:
++        {
++          v4l2sink->aspectratio = g_value_get_uint(value);
++          if(v4l2sink->oldaspectratio  != v4l2sink->aspectratio)
++          {
++            GST_DEBUG_OBJECT(v4l2sink, "aspect ratio = %d", v4l2sink->aspectratio);
++
++            if(GST_STATE(v4l2sink) == GST_STATE_PLAYING || GST_STATE(v4l2sink) == GST_STATE_READY)
++            {
++              gst_v4l2sink_set_aspectratio(v4l2sink);
++              gst_v4l2sink_sync_overlay_fields(v4l2sink);
++            }
++            else if(GST_STATE(v4l2sink) == GST_STATE_PAUSED)
++            {
++              gst_v4l2sink_set_aspectratio(v4l2sink);
++              gst_v4l2sink_sync_overlay_fields(v4l2sink);
++
++              if(v4l2sink->lastbuffer != NULL) 
++                gst_v4l2sink_show_lastframe(v4l2sink, v4l2sink->lastbuffer);
++            }
++          }
++          else
++          {
++            printf("%s %d aspect ratio = %d same value \n", __func__,__LINE__,v4l2sink->aspectratio);
++          }
++        }
++        break;
++#endif
+       default:
+         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+         break;
+@@ -427,6 +899,20 @@ gst_v4l2sink_get_property (GObject * object,
+       case PROP_CROP_HEIGHT:
+         g_value_set_uint (value, v4l2sink->crop.height);
+         break;
++#if defined(TCC_V4L2SINK_DRIVER_USE)
++      case PROP_OVERLAY_SET_TOP:
++        g_value_set_int(value, v4l2sink->overlay.top);
++        break;
++      case PROP_OVERLAY_SET_LEFT:
++        g_value_set_int(value, v4l2sink->overlay.left);
++        break;
++      case PROP_OVERLAY_SET_WIDTH:
++        g_value_set_uint(value, v4l2sink->overlay.width);
++        break;
++      case PROP_OVERLAY_SET_HEIGHT:
++        g_value_set_uint(value, v4l2sink->overlay.height);
++        break;
++#endif
+       default:
+         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+         break;
+@@ -461,6 +947,13 @@ gst_v4l2sink_change_state (GstElement * element, GstStateChange transition)
+ 
+   switch (transition) {
+     case GST_STATE_CHANGE_PAUSED_TO_READY:
++#ifdef TCC_V4L2SINK_DRIVER_USE
++      if(v4l2sink->lastbuffer != NULL)
++      {
++        gst_buffer_unref(v4l2sink->lastbuffer);
++      }
++      v4l2sink->lastbuffer = NULL;
++#endif
+       if (!gst_v4l2_object_stop (v4l2sink->v4l2object))
+         return GST_STATE_CHANGE_FAILURE;
+       break;
+@@ -508,7 +1001,12 @@ gst_v4l2sink_set_caps (GstBaseSink * bsink, GstCaps * caps)
+     GST_DEBUG_OBJECT (v4l2sink, "device is not open");
+     return FALSE;
+   }
+-
++#ifdef TCC_V4L2SINK_DRIVER_USE
++  if (!gst_v4l2sink_is_tcvdec(bsink)) {
++    GST_INFO_OBJECT (v4l2sink, "didn't connect telechips video decoder");
++  }
++  else GST_INFO_OBJECT (v4l2sink, "connect telechips video decoder");
++#endif
+   /* make sure the caps changed before doing anything */
+   if (gst_v4l2_object_caps_equal (obj, caps))
+     return TRUE;
+@@ -518,7 +1016,9 @@ gst_v4l2sink_set_caps (GstBaseSink * bsink, GstCaps * caps)
+ 
+   if (!gst_v4l2_object_set_format (obj, caps, &error))
+     goto invalid_format;
+-
++#ifdef TCC_V4L2SINK_DRIVER_USE
++  gst_v4l2sink_set_aspectratio(v4l2sink);
++#endif
+   gst_v4l2sink_sync_overlay_fields (v4l2sink);
+   gst_v4l2sink_sync_crop_fields (v4l2sink);
+ 
+@@ -580,6 +1080,127 @@ gst_v4l2sink_propose_allocation (GstBaseSink * bsink, GstQuery * query)
+   return TRUE;
+ }
+ 
++#ifdef TCC_V4L2SINK_DRIVER_USE
++#define GST_V4L2SINK_QUERY_NAME "GstV4l2SinkQuery"
++
++GstQuery *gst_v4l2sink_query_check_is_tcvdec (void)
++{
++  GstQuery *query;
++  GstStructure *structure;
++
++  structure = gst_structure_new (GST_V4L2SINK_QUERY_NAME,
++      "is-tcvdec", G_TYPE_BOOLEAN, FALSE, NULL);
++  query = gst_query_new_custom (GST_QUERY_CUSTOM, structure);
++
++  return query;
++}
++
++gboolean gst_v4l2sink_is_tcvdec(GstBaseSink *bsink)
++{
++  GstV4l2Sink *v4l2sink = GST_V4L2SINK (bsink);
++  GstV4l2Object *obj = v4l2sink->v4l2object;
++
++  gboolean ret = gst_v4l2_object_is_connected_tcvdec(obj);
++
++  if(bsink && bsink->sinkpad)
++  {
++    GstQuery *query = gst_v4l2sink_query_check_is_tcvdec();
++    gboolean res;
++    if(query)
++    {
++      res = gst_pad_peer_query (bsink->sinkpad, query);
++      if(res)
++      {
++        const GstStructure *s;
++        s = gst_query_get_structure (query);
++        if(s)
++        {
++          gboolean is_tcvdec = FALSE;
++          if(gst_structure_get_boolean (s, "is-tcvdec", &is_tcvdec))
++          {
++            gst_v4l2_object_set_connected_tcvdec(obj,is_tcvdec);
++            ret = is_tcvdec;
++          }
++          GST_INFO_OBJECT(v4l2sink,"is_tcvdec %d",is_tcvdec);
++        }
++      }
++      gst_query_unref (query);
++    }
++  }
++  return ret;
++}
++
++GstFlowReturn gst_v4l2sink_show_lastframe(GstBaseSink *bsink, GstBuffer *buf)
++{
++    GstFlowReturn ret;
++    GstV4l2Sink *v4l2sink = GST_V4L2SINK(bsink);
++    GstV4l2Object *obj = v4l2sink->v4l2object;
++
++    GST_DEBUG_OBJECT(v4l2sink, "render buffer: %p", buf);
++
++    if(G_UNLIKELY(obj->pool == NULL))
++        goto not_negotiated;
++
++    ret = gst_v4l2_buffer_pool_process(GST_V4L2_BUFFER_POOL_CAST(obj->pool), &buf, NULL);
++
++    // Sleep during delay time after output every frame for debugging
++    if(v4l2sink->delay)
++        usleep(v4l2sink->delay);
++
++    return ret;
++
++    /* ERRORS */
++not_negotiated:
++    {
++        GST_ERROR_OBJECT(bsink, "not negotiated");
++        return GST_FLOW_NOT_NEGOTIATED;
++    }
++}
++
++void gst_v4l2sink_last_frame_update(GstV4l2Sink *v4l2sink, GstBuffer *buf)
++{
++  if(gst_v4l2_object_is_connected_tcvdec(v4l2sink->v4l2object))
++  {
++    if(v4l2sink->lastbuffer)
++    {
++      gst_buffer_unref(v4l2sink->lastbuffer);
++      v4l2sink->lastbuffer = NULL;
++    }
++    v4l2sink->lastbuffer = gst_buffer_ref(buf);
++  }
++  else
++  {
++    GstMapInfo map;
++    gsize framesize, framesize_last;
++
++    framesize = gst_buffer_get_size(buf);
++    //printf("%s %d %d %d\n",__func__,__LINE__, framesize, obj->sizeimage);
++
++    if(v4l2sink->lastbuffer == NULL)
++    {
++      v4l2sink->lastbuffer = gst_buffer_new_and_alloc(framesize);
++    }
++    else
++    {
++      framesize_last  = gst_buffer_get_size(v4l2sink->lastbuffer);
++
++      if(framesize_last != framesize)
++      {
++        gst_buffer_unref(v4l2sink->lastbuffer);
++
++        v4l2sink->lastbuffer = gst_buffer_new_and_alloc(framesize);
++      }
++    }
++
++    gst_buffer_map(buf, &map, GST_MAP_READ);
++    gst_buffer_fill(v4l2sink->lastbuffer, 0, map.data, framesize);
++    gst_buffer_unmap(buf, &map);
++
++    gst_buffer_resize(v4l2sink->lastbuffer, 0, framesize);
++  }
++}
++#endif
++
+ /* called after A/V sync to render frame */
+ static GstFlowReturn
+ gst_v4l2sink_show_frame (GstVideoSink * vsink, GstBuffer * buf)
+@@ -609,6 +1230,16 @@ gst_v4l2sink_show_frame (GstVideoSink * vsink, GstBuffer * buf)
+       goto activate_failed;
+   }
+ 
++  if(!GST_BUFFER_PTS_IS_VALID(buf))
++  {
++    ret = GST_FLOW_OK;
++    goto done;
++  }
++
++#ifdef TCC_V4L2SINK_DRIVER_USE
++  gst_v4l2sink_last_frame_update(v4l2sink, buf);
++#endif
++
+   gst_buffer_ref (buf);
+ again:
+   ret = gst_v4l2_buffer_pool_process (GST_V4L2_BUFFER_POOL_CAST (bpool),
+@@ -622,6 +1253,78 @@ again:
+   if (bpool)
+     gst_object_unref (bpool);
+ 
++#ifdef TCC_V4L2SINK_DRIVER_USE
++  if(v4l2sink->delay)
++    usleep(v4l2sink->delay);
++#endif
++
++done:
++  return ret;
++
++  /* ERRORS */
++not_negotiated:
++  {
++    GST_ERROR_OBJECT (v4l2sink, "not negotiated");
++    return GST_FLOW_NOT_NEGOTIATED;
++  }
++activate_failed:
++  {
++    GST_ELEMENT_ERROR (v4l2sink, RESOURCE, SETTINGS,
++        (_("Failed to allocated required memory.")),
++        ("Buffer pool activation failed"));
++    return GST_FLOW_ERROR;
++  }
++}
++
++static GstFlowReturn gst_v4l2sink_preroll_show_frame (GstBaseSink *bsink, GstBuffer * buf)
++{
++  GstFlowReturn ret;
++  GstV4l2Sink *v4l2sink = GST_V4L2SINK (bsink);
++  GstV4l2Object *obj = v4l2sink->v4l2object;
++  GstBufferPool *bpool = GST_BUFFER_POOL (obj->pool);
++
++  GST_DEBUG_OBJECT (v4l2sink, "render buffer: %p", buf);
++
++  if (G_UNLIKELY (obj->pool == NULL))
++    goto not_negotiated;
++
++  if (G_UNLIKELY (!gst_buffer_pool_is_active (bpool))) {
++    GstStructure *config;
++
++    /* this pool was not activated, configure and activate */
++    GST_DEBUG_OBJECT (v4l2sink, "activating pool");
++
++    config = gst_buffer_pool_get_config (bpool);
++    gst_buffer_pool_config_add_option (config,
++        GST_BUFFER_POOL_OPTION_VIDEO_META);
++    gst_buffer_pool_set_config (bpool, config);
++
++    if (!gst_buffer_pool_set_active (bpool, TRUE))
++      goto activate_failed;
++  }
++
++#ifdef TCC_V4L2SINK_DRIVER_USE
++  gst_v4l2sink_last_frame_update(v4l2sink, buf);
++#endif
++
++  {
++    GstState state;
++    GstState pending;
++    GstStateChangeReturn change_ret;
++    change_ret = gst_element_get_state(GST_ELEMENT_CAST(bsink), &state, &pending, 0);
++
++    //[ID086A-339][ID083A-440]
++    if(change_ret == GST_STATE_CHANGE_ASYNC
++      && state == GST_STATE_READY
++      && pending == GST_STATE_PAUSED)
++    {
++      ret = GST_FLOW_OK;
++      GST_WARNING_OBJECT(bsink, "skip preroll change_ret %d , state %d , pending %d ",change_ret,state,pending);
++    }
++    else
++      ret = gst_v4l2_buffer_pool_preroll_process(GST_V4L2_BUFFER_POOL_CAST(obj->pool), &buf);
++  }
++
+   return ret;
+ 
+   /* ERRORS */
+diff --git a/sys/v4l2/gstv4l2sink.h b/sys/v4l2/gstv4l2sink.h
+index 33e97fb..97fb18c 100644
+--- a/sys/v4l2/gstv4l2sink.h
++++ b/sys/v4l2/gstv4l2sink.h
+@@ -65,6 +65,14 @@ struct _GstV4l2Sink {
+    * setting properties:
+    */
+   guint8 overlay_fields_set, crop_fields_set;
++#ifdef TCC_V4L2SINK_DRIVER_USE
++  struct v4l2_rect useroverlay;
++  guint8 isImageCaps;
++  guint32 delay;
++  gint aspectratio;
++  gint oldaspectratio;
++  GstBuffer *lastbuffer;
++#endif
+ };
+ 
+ struct _GstV4l2SinkClass {

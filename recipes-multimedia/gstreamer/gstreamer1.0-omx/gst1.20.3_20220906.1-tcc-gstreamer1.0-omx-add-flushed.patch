@@ -1,0 +1,57 @@
+diff -Naur 1.20.3-r0/gst-omx-1.20.3/omx/gstomxvideodec.c after/omx/gstomxvideodec.c
+--- 1.20.3-r0/gst-omx-1.20.3/omx/gstomxvideodec.c   2022-09-08 10:38:01.412476480 +0900
++++ after/omx/gstomxvideodec.c  2022-09-08 10:37:15.574876487 +0900
+@@ -2124,6 +2124,7 @@
+ 
+   self = GST_OMX_VIDEO_DEC (decoder);
+ 
++  self->flushed = TRUE;
+   self->last_upstream_ts = 0;
+   self->downstream_flow_ret = GST_FLOW_OK;
+   self->use_buffers = FALSE;
+@@ -2953,6 +2954,7 @@
+   }
+ 
+   /* Reset our state */
++  self->flushed = TRUE;
+   self->last_upstream_ts = 0;
+   self->downstream_flow_ret = GST_FLOW_OK;
+   self->started = FALSE;
+@@ -3203,10 +3205,10 @@
+
+     if (first_ouput_buffer && GST_VIDEO_CODEC_FRAME_IS_SYNC_POINT (frame))
+       buf->omx_buf->nFlags |= OMX_BUFFERFLAG_SYNCFRAME;
+-
++#if 0
+     if (header)
+       buf->omx_buf->nFlags |= OMX_BUFFERFLAG_CODECCONFIG;
+-
++#endif
+     /* TODO: Set flags
+      *   - OMX_BUFFERFLAG_DECODEONLY for buffers that are outside
+      *     the segment
+@@ -3225,6 +3227,12 @@
+       }
+     }
+ 
++
++    if(self->flushed) {
++      buf->omx_buf->nFlags |= OMX_BUFFERFLAG_STARTTIME;
++      self->flushed = FALSE;
++    }
++
+     self->started = TRUE;
+     err = gst_omx_port_release_buffer (port, buf);
+     if (err != OMX_ErrorNone)
+diff -Naur before/omx/gstomxvideodec.h after/omx/gstomxvideodec.h
+--- before/omx/gstomxvideodec.h	2020-07-02 14:54:04.144456230 +0900
++++ after/omx/gstomxvideodec.h	2020-07-02 13:43:25.836977858 +0900
+@@ -70,6 +70,8 @@
+    /* TRUE if the ports where disabled after being activated the first time. */
+   gboolean disabled;
+ 
++  gboolean flushed;
++
+   GstClockTime last_upstream_ts;
+ 
+   /* Draining state */

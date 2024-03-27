@@ -18,7 +18,7 @@ inherit autotools ${UPDATE_RCD}
 
 # for systemd
 SYSTEMD_PACKAGES = "${PN}"
-SYSTEMD_SERVICE_${PN} = "tc-usb-manager.service \
+SYSTEMD_SERVICE:${PN} = "tc-usb-manager.service \
 "
 
 # for sysvinit
@@ -42,9 +42,9 @@ do_install() {
 	fi
 }
 
-FILES_${PN} += " \
+FILES:${PN} += " \
 		${@bb.utils.contains('DISTRO_FEATURES', 'systemd', '${systemd_unitdir}', '', d)} \
 		"
 
-RDEPENDS_${PN} += "libusb1 libtcutils"
+RDEPENDS:${PN} += "libusb1 libtcutils"
 

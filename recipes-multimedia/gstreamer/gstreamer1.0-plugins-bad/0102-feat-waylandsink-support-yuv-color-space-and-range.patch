@@ -1,0 +1,48 @@
+From 1aa960eeabf25484299bfd179df532ee42f0c7ca Mon Sep 17 00:00:00 2001
+From: YoungJun <youngjun@telechips.com>
+Date: Wed, 14 Jun 2023 14:33:48 +0900
+Subject: [PATCH 2/3] [feat] waylandsink: support yuv color space and range
+
+- Add an interface to accurately render YUV-related information from the
+  source stream.
+
+Change-Id: If6a76173b21ced06b7a7c862847ee123544891e7
+---
+ ext/wayland/wllinuxdmabuf.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/ext/wayland/wllinuxdmabuf.c b/ext/wayland/wllinuxdmabuf.c
+index 96487d1..6c395de 100644
+--- a/ext/wayland/wllinuxdmabuf.c
++++ b/ext/wayland/wllinuxdmabuf.c
+@@ -79,6 +79,7 @@ gst_wl_linux_dmabuf_construct_wl_buffer (GstBuffer * buf,
+   struct zwp_linux_buffer_params_v1 *params;
+   gint64 timeout;
+   ConstructBufferData data;
++  GstVideoColorimetry color;
+ 
+   g_return_val_if_fail (gst_wl_display_check_format_for_dmabuf (display,
+           GST_VIDEO_INFO_FORMAT (info)), NULL);
+@@ -131,6 +132,19 @@ gst_wl_linux_dmabuf_construct_wl_buffer (GstBuffer * buf,
+     }
+   }
+ 
++  /* Get the yuv hint and send information to renderer */
++  color = GST_VIDEO_INFO_COLORIMETRY(info);
++  if (color.matrix == GST_VIDEO_COLOR_MATRIX_BT709 ||
++      color.matrix == GST_VIDEO_COLOR_MATRIX_BT2020) {
++    flags |= ZWP_LINUX_BUFFER_PARAMS_V1_FLAGS_COLOR_BT709;
++  }
++
++  if (color.range == GST_VIDEO_COLOR_RANGE_0_255) {
++    flags |= ZWP_LINUX_BUFFER_PARAMS_V1_FLAGS_COLOR_FULLRANGE;
++  }
++
++  GST_DEBUG ("color.matrix:%d color.range:%d\n", color.matrix, color.range);
++
+   /* Request buffer creation */
+   zwp_linux_buffer_params_v1_add_listener (params, &params_listener, &data);
+   zwp_linux_buffer_params_v1_create (params, width, height, format, flags);
+-- 
+2.25.1
+
